@@ -46,3 +46,21 @@ export async function forwardToBrain(payload) {
   logger.error({ err: errInfo(lastErr) }, 'forwardToBrain: all attempts failed');
   return null;
 }
+
+export async function reportWhatsAppSession(data) {
+  let origin;
+  try {
+    origin = new URL(config.brainWebhookUrl).origin;
+  } catch {
+    origin = 'http://localhost:8000';
+  }
+  try {
+    await fetch(`${origin}/sessions/whatsapp`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  } catch (err) {
+    logger.warn({ err: errInfo(err) }, 'could not persist WhatsApp session metadata');
+  }
+}

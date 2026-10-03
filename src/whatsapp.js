@@ -2,7 +2,7 @@ import pkg from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 import { config } from './config.js';
 import { logger, errInfo } from './logger.js';
-import { forwardToBrain } from './brain.js';
+import { forwardToBrain, reportWhatsAppSession } from './brain.js';
 import { buildPayload, buildPollVotePayload, listChatMembers, stripOutboundTags } from './payload.js';
 
 const { Client, LocalAuth, Poll } = pkg;
@@ -380,6 +380,12 @@ export function createClient() {
     state.needsQr = false;
     reconnectAttempt = 0;
     logger.info({ agent_id: state.selfId }, 'WhatsApp client ready');
+    reportWhatsAppSession({
+      agent_id: state.selfId,
+      status: 'ready',
+      ready_at: state.readyAt,
+      auth_path: config.authDataPath,
+    }).catch(() => {});
   });
 
   client.on('disconnected', (reason) => {
