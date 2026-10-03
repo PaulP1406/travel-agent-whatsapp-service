@@ -6,10 +6,14 @@ import { logger, errInfo } from './logger.js';
 
 // Shared by /send and /send/batch: validates a single message spec and
 // normalizes it into the job shape sendMessage()/doSend() expect. Exactly one
-// of `text` or `poll` must be present.
+// of `text` or `poll` must be present. Accepts `group_id` (the orchestrator's
+// existing field name, per its CONTRACTS.md) or `chat_id` (this service's
+// own naming elsewhere, e.g. /groups/:id) — whichever the caller sends.
 function parseSendBody(body) {
-  const { chat_id: chatId, text, poll, reply_to_message_id: replyToMessageId, mentions } = body ?? {};
-  if (!chatId) return { error: 'chat_id is required' };
+  const { group_id: groupId, chat_id: chatId, text, poll, reply_to_message_id: replyToMessageId, mentions } =
+    body ?? {};
+  const id = groupId ?? chatId;
+  if (!id) return { error: 'group_id is required' };
 
   const hasText = typeof text === 'string' && text.length > 0;
   const hasPoll = poll && typeof poll === 'object';
@@ -27,7 +31,7 @@ function parseSendBody(body) {
 
   return {
     job: {
-      chatId,
+      chatId: id,
       text: hasText ? text : undefined,
       poll: hasPoll
         ? { name: poll.name, options: poll.options, allowMultipleAnswers: !!poll.allow_multiple_answers }

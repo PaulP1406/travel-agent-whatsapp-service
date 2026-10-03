@@ -37,17 +37,18 @@ function makeDmChat(overrides = {}) {
   };
 }
 
-test('buildPayload produces the §3.1 shape', async () => {
+test('buildPayload produces the flat orchestrator contract shape', async () => {
   const payload = await buildPayload(makeMsg(), makeGroupChat(), '1555@c.us');
 
   assert.equal(payload.event, 'message');
   assert.equal(payload.channel, 'whatsapp');
   assert.equal(payload.message_id, 'false_1203@g.us_ABC');
-  assert.equal(payload.chat.id, '1203@g.us');
-  assert.equal(payload.chat.is_group, true);
-  assert.equal(payload.chat.participant_count, 5);
-  assert.equal(payload.sender.id, '14165551234@c.us');
-  assert.equal(payload.sender.name, 'Priya');
+  assert.equal(payload.group_id, '1203@g.us');
+  assert.equal(payload.group_name, 'Lisbon trip');
+  assert.equal(payload.is_group, true);
+  assert.equal(payload.participant_count, 5);
+  assert.equal(payload.sender_id, '14165551234@c.us');
+  assert.equal(payload.sender_name, 'Priya');
   assert.equal(payload.text, 'hello @agent');
   assert.equal(payload.agent_id, '1555@c.us');
   assert.equal(payload.quoted, null);
@@ -68,15 +69,15 @@ test('tagged is true only when selfId is among the mentioned ids', async () => {
 test('group messages use msg.author as the sender id', async () => {
   const msg = makeMsg({ author: '14165551234@c.us', from: '1203@g.us' });
   const payload = await buildPayload(msg, makeGroupChat(), null);
-  assert.equal(payload.sender.id, '14165551234@c.us');
+  assert.equal(payload.sender_id, '14165551234@c.us');
 });
 
 test('DMs use msg.from as the sender id', async () => {
   const msg = makeMsg({ author: undefined, from: '14165551234@c.us' });
   const payload = await buildPayload(msg, makeDmChat(), null);
-  assert.equal(payload.sender.id, '14165551234@c.us');
-  assert.equal(payload.chat.is_group, false);
-  assert.equal(payload.chat.participant_count, null);
+  assert.equal(payload.sender_id, '14165551234@c.us');
+  assert.equal(payload.is_group, false);
+  assert.equal(payload.participant_count, null);
 });
 
 test('a quoted message is included when present', async () => {
@@ -130,13 +131,14 @@ function makeVote(overrides = {}) {
   };
 }
 
-test('buildPollVotePayload produces the poll_vote event shape', async () => {
+test('buildPollVotePayload produces the flat poll_vote event shape', async () => {
   const payload = await buildPollVotePayload(makeVote(), makeGroupChat(), '1555@c.us');
   assert.equal(payload.event, 'poll_vote');
   assert.equal(payload.channel, 'whatsapp');
-  assert.equal(payload.chat.id, '1203@g.us');
-  assert.equal(payload.voter.id, '14165551234@c.us');
-  assert.equal(payload.voter.name, 'Priya');
+  assert.equal(payload.group_id, '1203@g.us');
+  assert.equal(payload.group_name, 'Lisbon trip');
+  assert.equal(payload.voter_id, '14165551234@c.us');
+  assert.equal(payload.voter_name, 'Priya');
   assert.equal(payload.poll_message_id, 'poll_msg_id');
   assert.equal(payload.poll_name, 'Where should we stay?');
   assert.deepEqual(payload.selected_options, ['Hotel B']);
@@ -158,6 +160,6 @@ test('buildPollVotePayload falls back to the bare id when contact lookup fails',
     },
   });
   const payload = await buildPollVotePayload(vote, makeGroupChat(), null);
-  assert.equal(payload.voter.name, '14165551234@c.us');
-  assert.equal(payload.voter.phone, '14165551234');
+  assert.equal(payload.voter_name, '14165551234@c.us');
+  assert.equal(payload.voter_phone, '14165551234');
 });

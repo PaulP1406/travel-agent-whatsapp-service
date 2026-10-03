@@ -78,12 +78,18 @@ signature, logs every payload, and echoes back tagged messages.
 
 ## Contracts
 
+Field names here match the orchestrator's own `CONTRACTS.md` (flat
+`group_id`/`sender_id`, not nested objects) — this service conforms to the
+brain's established contract. See `docs/whatsapp-poll-integration.md` in the
+orchestrator repo for what the brain side needs to implement for polls, the
+one genuinely new piece on both sides.
+
 ### Inbound: service → brain
 
 `POST {BRAIN_WEBHOOK_URL}` with headers:
 - `Content-Type: application/json`
 - `X-Timestamp: <unix seconds>`
-- `X-Signature: sha256=<hex>` where hex = `HMAC-SHA256(secret, "<timestamp>.<raw body>")`
+- `X-Signature: sha256=<hex>` where hex = `HMAC-SHA256(secret, "<timestamp>.<raw body>")` — only sent when `BRAIN_SHARED_SECRET` is set. Leave it unset if the brain doesn't verify it (it doesn't, today).
 
 Body:
 
@@ -92,12 +98,17 @@ Body:
   "event": "message",
   "channel": "whatsapp",
   "message_id": "false_1203…@g.us_3EB0…",
-  "timestamp": 1759400000,
-  "chat":   { "id": "1203…@g.us", "name": "Lisbon trip", "is_group": true, "participant_count": 5 },
-  "sender": { "id": "14165551234@c.us", "name": "Priya", "phone": "14165551234" },
+  "group_id": "1203…@g.us",
+  "group_name": "Lisbon trip",
+  "sender_id": "14165551234@c.us",
+  "sender_name": "Priya",
+  "sender_phone": "14165551234",
   "text": "@Yate figure this out",
-  "type": "chat",
   "tagged": true,
+  "timestamp": 1759400000,
+  "type": "chat",
+  "is_group": true,
+  "participant_count": 5,
   "mentioned_ids": ["1555…@c.us"],
   "quoted": { "id": "…", "sender_id": "…", "text": "…", "from_me": false } | null,
   "media":  { "type": "image", "mimetype": "image/jpeg", "filename": null, "data_base64": "…" } | { "type": "image" } | null,
@@ -105,16 +116,25 @@ Body:
 }
 ```
 
+`event`, `channel`, `type`, `is_group`, `participant_count`, `mentioned_ids`,
+`quoted`, `media`, and `agent_id` are extra fields beyond the orchestrator's
+documented `IncomingMessage` shape — safe to ignore (Go's JSON decoder drops
+unknown fields), there if the brain wants richer signal later.
+
 A second inbound event, `poll_vote`, fires whenever someone taps an option on
 a WhatsApp poll (whether the poll was created by the brain via `/send` or by
-anyone else in the chat):
+anyone else in the chat). **This event type doesn't exist in the brain's
+current contract yet** — these are this service's proposed field names:
 
 ```jsonc
 {
   "event": "poll_vote",
   "channel": "whatsapp",
-  "chat":   { "id": "1203…@g.us", "name": "Lisbon trip", "is_group": true, "participant_count": 5 },
-  "voter":  { "id": "14165551234@c.us", "name": "Priya", "phone": "14165551234" },
+  "group_id": "1203…@g.us",
+  "group_name": "Lisbon trip",
+  "voter_id": "14165551234@c.us",
+  "voter_name": "Priya",
+  "voter_phone": "14165551234",
   "poll_message_id": "true_1203…@g.us_3EB0…",
   "poll_name": "Which vibe should this trip be?",
   "selected_options": ["Chill beach town"],
@@ -124,61 +144,42 @@ anyone else in the chat):
 ```
 
 `selected_options` is `[]` when the voter deselects everything (WhatsApp
-allows withdrawing a vote). For both event types, the brain may respond `200`
+allows withdrawing a vote).
+
+For both event types, this service's HTTP response body is only read by
+simple test stubs like `scripts/fake-brain.js` — the brain may respond `200`
 with `{ "reply": "text", "quote": true }` for an immediate text reply, **or**
 `{ "poll": { "name", "options", "allow_multiple_answers" }, "quote": true }`
-to send a new poll instead, or `{}` to stay silent — never both `reply` and
-`poll` in the same response. The service retries on network error or 5xx (3
-attempts, backoff 500ms × attempt) and never crashes on brain failure.
+for a new poll, or `{}`/anything else to stay silent in-band. **The
+orchestrator's actual pattern is asynchronous**: it always acks the webhook
+instantly (`{"reply": null, "accepted": true}`) and delivers real replies
+later via a separate call to `POST /send` below — both patterns work against
+this service without any code change here. The service retries forwarding on
+network error or 5xx (3 attempts, backoff 500ms × attempt) and never crashes
+on brain failure.
 
 ### Outbound: brain → service
 
-All routes except `/health` require `Authorization: Bearer {SERVICE_TOKEN}`.
+`/send` and `/send/batch` accept `group_id` (the orchestrator's field name)
+or `chat_id` interchangeably. All routes except `/health` require
+`Authorization: Bearer {SERVICE_TOKEN}` **if `SERVICE_TOKEN` is set** — leave
+it unset for now since the orchestrator's `RobotMessenger` doesn't send an
+Authorization header yet.
 
 | Method | Path | Body / Query | Response |
 |---|---|---|---|
 | GET | `/health` | — | `{ ok, status, ready_at, agent_id, relayed, sent, needs_qr }` |
-| POST | `/send` | `{ chat_id, text? \| poll?, reply_to_message_id?, mentions? }` | `{ ok, message_id, timestamp }` |
-| POST | `/send/batch` | `{ messages: [ {chat_id, text? \| poll?, …} ] }` | `{ results: [...] }` |
+| POST | `/send` | `{ group_id, text? \| poll?, reply_to_message_id?, mentions? }` | `{ ok, message_id, timestamp }` |
+| POST | `/send/batch` | `{ messages: [ {group_id, text? \| poll?, …} ] }` | `{ results: [...] }` |
 | GET | `/groups` | — | `{ groups: [ {id, name, participant_count, unread} ] }` |
 | GET | `/groups/:id` | — | `{ id, name, description, participants: [ {id, is_admin, is_agent} ] }` |
 | GET | `/groups/:id/history` | `?limit=50` (max 200) | `{ chat_id, messages: [...] }` |
 
 `poll` is `{ "name": "...", "options": ["A", "B"], "allow_multiple_answers": false }`
-(`options` needs at least 2 entries). Exactly one of `text` or `poll` is
-required per message. Status codes: `400` bad input, `401` bad token, `404`
-unknown chat, `503` client not ready.
-
-### Verifying the signature from the brain (FastAPI)
-
-```python
-import hashlib, hmac
-from fastapi import FastAPI, Request, HTTPException
-
-BRAIN_SHARED_SECRET = "..."  # same value as this service's BRAIN_SHARED_SECRET
-
-app = FastAPI()
-
-@app.post("/webhook/whatsapp")
-async def webhook(request: Request):
-    raw_body = await request.body()
-    timestamp = request.headers.get("x-timestamp", "")
-    signature = request.headers.get("x-signature", "")
-
-    if BRAIN_SHARED_SECRET:
-        expected = "sha256=" + hmac.new(
-            BRAIN_SHARED_SECRET.encode(),
-            f"{timestamp}.{raw_body.decode()}".encode(),
-            hashlib.sha256,
-        ).hexdigest()
-        if not hmac.compare_digest(expected, signature):
-            raise HTTPException(status_code=401, detail="bad signature")
-
-    payload = await request.json()
-    if payload.get("tagged"):
-        return {"reply": "got it!", "quote": True}
-    return {}
-```
+(`options` needs at least 2 entries) — new, not yet used by the orchestrator's
+`Messenger` interface. Exactly one of `text` or `poll` is required per
+message. Status codes: `400` bad input, `401` bad token, `404` unknown chat,
+`503` client not ready.
 
 ## Testing
 

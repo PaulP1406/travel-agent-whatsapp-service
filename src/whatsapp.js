@@ -275,7 +275,7 @@ async function handleIncomingMessage(msg) {
   }
   state.relayed += 1;
   logger.info(
-    { chat: payload.chat.id, sender: payload.sender.id, text: truncate(payload.text), tagged: payload.tagged },
+    { group: payload.group_id, sender: payload.sender_id, text: truncate(payload.text), tagged: payload.tagged },
     'relaying message to brain',
   );
   logger.debug({ payload }, 'full payload');
@@ -330,7 +330,7 @@ async function handlePollVote(vote) {
   const payload = await buildPollVotePayload(vote, chat, state.selfId);
   state.relayed += 1;
   logger.info(
-    { chat: payload.chat.id, voter: payload.voter.id, poll: payload.poll_name, selected: payload.selected_options },
+    { group: payload.group_id, voter: payload.voter_id, poll: payload.poll_name, selected: payload.selected_options },
     'relaying poll vote to brain',
   );
   logger.debug({ payload }, 'full poll vote payload');

@@ -8,8 +8,8 @@ const app = express();
 app.use(express.text({ type: '*/*' }));
 
 // Stands in for what the real brain will eventually persist in its own DB,
-// keyed by chat.id — the session the brain creates lazily the first time it
-// sees `tagged: true` for a given group, per the chat_id-as-session-key plan.
+// keyed by group_id — the session the brain creates lazily the first time it
+// sees `tagged: true` for a given group, per the group_id-as-session-key plan.
 // Purely a local demo scaffold for the planning → poll → confirm → booking
 // loop; none of this logic belongs in the actual service.
 const sessions = new Map();
@@ -39,10 +39,10 @@ function getSession(chatId, resetIfText) {
 function handleMessage(payload) {
   if (!payload.tagged) return {};
 
-  const chatId = payload.chat?.id;
+  const groupId = payload.group_id;
   const text = payload.text ?? '';
-  const senderName = payload.sender?.name ?? 'there';
-  const session = getSession(chatId, text);
+  const senderName = payload.sender_name ?? 'there';
+  const session = getSession(groupId, text);
 
   switch (session.stage) {
     case 'start':
@@ -85,8 +85,8 @@ function handleMessage(payload) {
 }
 
 function handlePollVote(payload) {
-  const chatId = payload.chat?.id;
-  const session = sessions.get(chatId);
+  const groupId = payload.group_id;
+  const session = sessions.get(groupId);
   if (!session || session.stage !== 'voting') return {}; // not a poll we're tracking right now
 
   const choice = payload.selected_options?.[0];
@@ -95,7 +95,7 @@ function handlePollVote(payload) {
   session.stage = 'confirmed';
   session.chosenVibe = choice;
   return {
-    reply: `${payload.voter?.name ?? 'Someone'} picked "${choice}" 🎉 Locking that in as the direction — want me to go ahead and hold the bookings?`,
+    reply: `${payload.voter_name ?? 'Someone'} picked "${choice}" 🎉 Locking that in as the direction — want me to go ahead and hold the bookings?`,
     quote: false,
   };
 }
