@@ -66,6 +66,48 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const TYPING_PULSE_MS = 8000;
+const TYPING_MAX_MS = 120000;
+const typingByChat = new Map();
+
+async function pulseTyping(chatId) {
+  if (!state.ready || !state.client) return;
+  try {
+    const chat = await state.client.getChatById(chatId);
+    await chat.sendStateTyping();
+  } catch (err) {
+    logger.warn({ err: errInfo(err), chatId }, 'failed to set typing indicator');
+  }
+}
+
+function startTyping(chatId, maxMs = TYPING_MAX_MS) {
+  if (!config.showTyping || !chatId) return;
+  stopTypingTimer(chatId);
+  pulseTyping(chatId);
+  const interval = setInterval(() => pulseTyping(chatId), TYPING_PULSE_MS);
+  const timeout = setTimeout(() => stopTyping(chatId), maxMs);
+  typingByChat.set(chatId, { interval, timeout });
+}
+
+function stopTypingTimer(chatId) {
+  const t = typingByChat.get(chatId);
+  if (!t) return;
+  clearInterval(t.interval);
+  clearTimeout(t.timeout);
+  typingByChat.delete(chatId);
+}
+
+async function stopTyping(chatId) {
+  stopTypingTimer(chatId);
+  if (!state.ready || !state.client || !chatId) return;
+  try {
+    const chat = await state.client.getChatById(chatId);
+    await chat.clearState();
+  } catch (err) {
+    logger.warn({ err: errInfo(err), chatId }, 'failed to clear typing indicator');
+  }
+}
+
 // msg.getChat() resolves the chat id internally as `fromMe ? msg.to : msg.from`
 // (whatsapp-web.js Message.js _getChatId). For some self-sent messages that
 // `to` field doesn't come through from WhatsApp Web, making the lookup throw
@@ -158,6 +200,7 @@ async function doSend({ chatId, text, poll, replyToMessageId, mentions }) {
   markOwnSending(chatId, poll ? poll.name : text);
 
   const sentMsg = await chat.sendMessage(content, options);
+  await stopTyping(chatId);
   if (!sentMsg) {
     const err = new Error('WhatsApp did not confirm the message was sent');
     err.statusCode = 502;
@@ -286,27 +329,13 @@ async function handleIncomingMessage(msg) {
   );
   logger.debug({ payload }, 'full payload');
 
-  let typingStarted = false;
+  const chatId = chat.id._serialized;
   if (config.showTyping && payload.tagged) {
-    try {
-      await chat.sendStateTyping();
-      typingStarted = true;
-    } catch (err) {
-      logger.warn({ err: errInfo(err) }, 'failed to set typing indicator');
-    }
+    startTyping(chatId);
   }
 
   const result = await forwardToBrain(payload);
-
-  if (typingStarted) {
-    try {
-      await chat.clearState();
-    } catch (err) {
-      logger.warn({ err: errInfo(err) }, 'failed to clear typing indicator');
-    }
-  }
-
-  await sendBrainReply(chat.id._serialized, msgId, result);
+  await sendBrainReply(chatId, msgId, result);
 }
 
 // The brain's webhook response can carry either `reply` (plain text) or
