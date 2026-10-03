@@ -10,14 +10,13 @@ app.use(express.text({ type: '*/*' }));
 // Stands in for what the real brain will eventually persist in its own DB,
 // keyed by chat.id — the session the brain creates lazily the first time it
 // sees `tagged: true` for a given group, per the chat_id-as-session-key plan.
-// Purely a local demo scaffold for the planning → confirm → booking loop;
-// none of this logic belongs in the actual service.
+// Purely a local demo scaffold for the planning → poll → confirm → booking
+// loop; none of this logic belongs in the actual service.
 const sessions = new Map();
 
 const RESET_WORDS = ['start over', 'new trip', 'restart'];
 const CONFIRM_WORDS = ['yes', 'confirm', 'sounds good', 'looks good', 'perfect', 'great', 'love it', '👍'];
 const BOOK_WORDS = ['book', 'go ahead', 'do it', "let's book", 'lock it in'];
-const CHANGE_WORDS = ['change', 'no', 'redo', 'different', 'swap', 'tweak', 'adjust'];
 
 function matchesAny(text, words) {
   const lower = text.toLowerCase();
@@ -28,46 +27,77 @@ function pick(options) {
   return options[Math.floor(Math.random() * options.length)];
 }
 
-function reply(chatId, text, senderName) {
+function getSession(chatId, resetIfText) {
   let session = sessions.get(chatId);
-  if (!session || matchesAny(text, RESET_WORDS)) {
+  if (!session || (resetIfText && matchesAny(resetIfText, RESET_WORDS))) {
     session = { stage: 'start' };
     sessions.set(chatId, session);
   }
+  return session;
+}
+
+function handleMessage(payload) {
+  if (!payload.tagged) return {};
+
+  const chatId = payload.chat?.id;
+  const text = payload.text ?? '';
+  const senderName = payload.sender?.name ?? 'there';
+  const session = getSession(chatId, text);
 
   switch (session.stage) {
     case 'start':
       session.stage = 'drafting';
-      return pick([
-        `Hey ${senderName}! I'm in 🙌 Where are we thinking, roughly when, and how many people?`,
-        `Ooh, a trip! Give me a destination, rough dates, and a headcount and I'll start putting something together.`,
-      ]);
+      return {
+        reply: pick([
+          `Hey ${senderName}! I'm in 🙌 Where are we thinking, roughly when, and how many people?`,
+          "Ooh, a trip! Give me a destination, rough dates, and a headcount and I'll start putting something together.",
+        ]),
+        quote: true,
+      };
 
     case 'drafting':
-      session.stage = 'drafted';
-      return "Okay, here's a rough first draft:\n• Day 1 — arrive, settle in, easy dinner nearby\n• Day 2 — the big must-see thing + a local food crawl\n• Day 3 — something more chill, maybe a day trip\n\nDoes this feel right, or want me to switch things up?";
+      session.stage = 'voting';
+      return {
+        poll: {
+          name: 'Which vibe should this trip be?',
+          options: ['Chill beach town', 'Packed city adventure', 'Mix of both'],
+          allow_multiple_answers: false,
+        },
+      };
 
-    case 'drafted':
-      if (matchesAny(text, CHANGE_WORDS)) {
-        return "Got it, tweaking it now — give me a sec and I'll have an updated version.";
-      }
-      session.stage = 'confirmed';
-      return pick([
-        'Love it, locking that in ✅ Want me to go ahead and hold the bookings, or are you all still deciding?',
-        "Great, I'll treat that as the plan. Say the word whenever you want me to actually book it.",
-      ]);
+    case 'voting':
+      return { reply: 'Still waiting on votes — tap an option on the poll above! 👆', quote: true };
 
     case 'confirmed':
       if (matchesAny(text, BOOK_WORDS) || matchesAny(text, CONFIRM_WORDS)) {
         session.stage = 'booked';
-        return "Booked! 🎉 You're all set — I'll post details here as they come through.";
+        return { reply: "Booked! 🎉 You're all set — I'll post details here as they come through.", quote: true };
       }
-      return 'No rush — just tag me whenever you want me to go ahead and book it.';
+      return { reply: 'No rush — just tag me whenever you want me to go ahead and book it.', quote: true };
 
     case 'booked':
     default:
-      return 'This trip is already booked! Want to plan another one? Just say "new trip" and I\'ll start fresh.';
+      return {
+        reply: 'This trip is already booked! Want to plan another one? Just say "new trip" and I\'ll start fresh.',
+        quote: true,
+      };
   }
+}
+
+function handlePollVote(payload) {
+  const chatId = payload.chat?.id;
+  const session = sessions.get(chatId);
+  if (!session || session.stage !== 'voting') return {}; // not a poll we're tracking right now
+
+  const choice = payload.selected_options?.[0];
+  if (!choice) return {}; // they deselected everything — stay quiet
+
+  session.stage = 'confirmed';
+  session.chosenVibe = choice;
+  return {
+    reply: `${payload.voter?.name ?? 'Someone'} picked "${choice}" 🎉 Locking that in as the direction — want me to go ahead and hold the bookings?`,
+    quote: false,
+  };
 }
 
 app.post('/webhook/whatsapp', (req, res) => {
@@ -89,14 +119,11 @@ app.post('/webhook/whatsapp', (req, res) => {
     payload = {};
   }
 
-  console.log('--- incoming message ---');
+  console.log(`--- incoming ${payload.event ?? 'unknown'} event ---`);
   console.log(JSON.stringify(payload, null, 2));
 
-  if (payload.tagged) {
-    const text = reply(payload.chat?.id, payload.text ?? '', payload.sender?.name ?? 'there');
-    return res.json({ reply: text, quote: true });
-  }
-  return res.json({});
+  const result = payload.event === 'poll_vote' ? handlePollVote(payload) : handleMessage(payload);
+  return res.json(result);
 });
 
 app.listen(PORT, () => {

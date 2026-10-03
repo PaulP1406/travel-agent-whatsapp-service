@@ -3,9 +3,9 @@ import qrcode from 'qrcode-terminal';
 import { config } from './config.js';
 import { logger, errInfo } from './logger.js';
 import { forwardToBrain } from './brain.js';
-import { buildPayload } from './payload.js';
+import { buildPayload, buildPollVotePayload } from './payload.js';
 
-const { Client, LocalAuth } = pkg;
+const { Client, LocalAuth, Poll } = pkg;
 
 export const state = {
   client: null,
@@ -115,7 +115,7 @@ async function processQueue() {
   processing = false;
 }
 
-async function doSend({ chatId, text, replyToMessageId, mentions }) {
+async function doSend({ chatId, text, poll, replyToMessageId, mentions }) {
   if (!state.ready) {
     const err = new Error('client not ready');
     err.statusCode = 503;
@@ -140,8 +140,15 @@ async function doSend({ chatId, text, replyToMessageId, mentions }) {
   if (mentions?.length) options.mentions = mentions;
   if (replyToMessageId) options.quotedMessageId = replyToMessageId;
 
-  markOwnSending(chatId, text);
-  const sentMsg = await chat.sendMessage(text, options);
+  // A poll-creation message's own body resolves to its pollName (see
+  // whatsapp-web.js Message.js: `data.body || data.pollName || ...`), so match
+  // on that for the own-sent loop guard — it's what message_create will see.
+  const content = poll
+    ? new Poll(poll.name, poll.options, { allowMultipleAnswers: !!poll.allowMultipleAnswers })
+    : text;
+  markOwnSending(chatId, poll ? poll.name : text);
+
+  const sentMsg = await chat.sendMessage(content, options);
   if (!sentMsg) {
     const err = new Error('WhatsApp did not confirm the message was sent');
     err.statusCode = 502;
@@ -153,19 +160,6 @@ async function doSend({ chatId, text, replyToMessageId, mentions }) {
 
 export function sendMessage(job) {
   return enqueueSend(job);
-}
-
-export async function sendBatch(messages) {
-  const results = [];
-  for (const m of messages) {
-    try {
-      const r = await sendMessage(m);
-      results.push(r);
-    } catch (err) {
-      results.push({ ok: false, error: err.message, statusCode: err.statusCode ?? 500 });
-    }
-  }
-  return results;
 }
 
 // --- queries ---
@@ -306,17 +300,44 @@ async function handleIncomingMessage(msg) {
     }
   }
 
-  if (result?.reply) {
-    try {
-      await enqueueSend({
-        chatId: chat.id._serialized,
-        text: result.reply,
-        replyToMessageId: result.quote ? msgId : undefined,
-      });
-    } catch (err) {
-      logger.error({ err: errInfo(err) }, 'failed to send brain reply');
-    }
+  await sendBrainReply(chat.id._serialized, msgId, result);
+}
+
+// The brain's webhook response can carry either `reply` (plain text) or
+// `poll` (a new WhatsApp poll) — never both. Shared by the message and
+// poll-vote handlers so either inbound event can trigger either kind of reply.
+async function sendBrainReply(chatId, quoteMessageId, result) {
+  if (!result?.reply && !result?.poll) return;
+  try {
+    await enqueueSend({
+      chatId,
+      text: result.poll ? undefined : result.reply,
+      poll: result.poll,
+      replyToMessageId: result.quote ? quoteMessageId : undefined,
+    });
+  } catch (err) {
+    logger.error({ err: errInfo(err) }, 'failed to send brain reply');
   }
+}
+
+async function handlePollVote(vote) {
+  const chat = await safeGetChat(vote.parentMessage);
+  if (config.groupsOnly && !chat.isGroup) return;
+  if (chat.isGroup && config.allowedGroupIds.length && !config.allowedGroupIds.includes(chat.id._serialized)) {
+    return;
+  }
+
+  const payload = await buildPollVotePayload(vote, chat, state.selfId);
+  state.relayed += 1;
+  logger.info(
+    { chat: payload.chat.id, voter: payload.voter.id, poll: payload.poll_name, selected: payload.selected_options },
+    'relaying poll vote to brain',
+  );
+  logger.debug({ payload }, 'full poll vote payload');
+
+  const result = await forwardToBrain(payload);
+
+  await sendBrainReply(chat.id._serialized, payload.poll_message_id, result);
 }
 
 export function createClient() {
@@ -371,6 +392,14 @@ export function createClient() {
       await handleIncomingMessage(msg);
     } catch (err) {
       logger.error({ err: errInfo(err) }, 'error handling incoming message');
+    }
+  });
+
+  client.on('vote_update', async (vote) => {
+    try {
+      await handlePollVote(vote);
+    } catch (err) {
+      logger.error({ err: errInfo(err) }, 'error handling poll vote');
     }
   });
 

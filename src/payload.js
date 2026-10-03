@@ -3,6 +3,16 @@ function mapMediaType(type) {
   return type || 'unknown';
 }
 
+function buildChatSummary(chat) {
+  const isGroup = !!chat.isGroup;
+  return {
+    id: chat.id?._serialized ?? chat.id,
+    name: chat.name,
+    is_group: isGroup,
+    participant_count: isGroup ? chat.participants?.length ?? null : null,
+  };
+}
+
 async function getMentionedIds(msg) {
   if (typeof msg.getMentions === 'function') {
     try {
@@ -57,12 +67,7 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
     channel: 'whatsapp',
     message_id: msg.id?._serialized ?? msg.id,
     timestamp: msg.timestamp,
-    chat: {
-      id: chat.id?._serialized ?? chat.id,
-      name: chat.name,
-      is_group: isGroup,
-      participant_count: isGroup ? chat.participants?.length ?? null : null,
-    },
+    chat: buildChatSummary(chat),
     sender: {
       id: senderId,
       name: contact?.pushname || contact?.name || contact?.number || senderId,
@@ -75,5 +80,33 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
     quoted,
     media,
     agent_id: selfId,
+  };
+}
+
+// vote.client is set by whatsapp-web.js's Base class constructor — there's no
+// vote.getContact() helper, so resolve the voter's contact the same way Chat
+// and Message do internally (via client.getContactById).
+export async function buildPollVotePayload(vote, chat, selfId) {
+  let contact = null;
+  try {
+    contact = await vote.client.getContactById(vote.voter);
+  } catch {
+    // best effort — fall back to the bare id below
+  }
+
+  return {
+    event: 'poll_vote',
+    channel: 'whatsapp',
+    chat: buildChatSummary(chat),
+    voter: {
+      id: vote.voter,
+      name: contact?.pushname || contact?.name || contact?.number || vote.voter,
+      phone: contact?.number ?? vote.voter?.split('@')[0],
+    },
+    poll_message_id: vote.parentMessage?.id?._serialized ?? null,
+    poll_name: vote.parentMessage?.pollName ?? null,
+    selected_options: vote.selectedOptions.map((o) => o.name ?? String(o.localId)),
+    agent_id: selfId,
+    timestamp: vote.interractedAtTs ? Math.floor(vote.interractedAtTs / 1000) : Math.floor(Date.now() / 1000),
   };
 }

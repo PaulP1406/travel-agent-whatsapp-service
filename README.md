@@ -105,10 +105,31 @@ Body:
 }
 ```
 
-The brain may respond `200` with `{ "reply": "text", "quote": true }` for an
-immediate reply, or `{}` to stay silent. The service retries on network error
-or 5xx (3 attempts, backoff 500ms × attempt) and never crashes on brain
-failure.
+A second inbound event, `poll_vote`, fires whenever someone taps an option on
+a WhatsApp poll (whether the poll was created by the brain via `/send` or by
+anyone else in the chat):
+
+```jsonc
+{
+  "event": "poll_vote",
+  "channel": "whatsapp",
+  "chat":   { "id": "1203…@g.us", "name": "Lisbon trip", "is_group": true, "participant_count": 5 },
+  "voter":  { "id": "14165551234@c.us", "name": "Priya", "phone": "14165551234" },
+  "poll_message_id": "true_1203…@g.us_3EB0…",
+  "poll_name": "Which vibe should this trip be?",
+  "selected_options": ["Chill beach town"],
+  "agent_id": "1555…@c.us",
+  "timestamp": 1759400000
+}
+```
+
+`selected_options` is `[]` when the voter deselects everything (WhatsApp
+allows withdrawing a vote). For both event types, the brain may respond `200`
+with `{ "reply": "text", "quote": true }` for an immediate text reply, **or**
+`{ "poll": { "name", "options", "allow_multiple_answers" }, "quote": true }`
+to send a new poll instead, or `{}` to stay silent — never both `reply` and
+`poll` in the same response. The service retries on network error or 5xx (3
+attempts, backoff 500ms × attempt) and never crashes on brain failure.
 
 ### Outbound: brain → service
 
@@ -117,14 +138,16 @@ All routes except `/health` require `Authorization: Bearer {SERVICE_TOKEN}`.
 | Method | Path | Body / Query | Response |
 |---|---|---|---|
 | GET | `/health` | — | `{ ok, status, ready_at, agent_id, relayed, sent, needs_qr }` |
-| POST | `/send` | `{ chat_id, text, reply_to_message_id?, mentions? }` | `{ ok, message_id, timestamp }` |
-| POST | `/send/batch` | `{ messages: [ {chat_id, text, …} ] }` | `{ results: [...] }` |
+| POST | `/send` | `{ chat_id, text? \| poll?, reply_to_message_id?, mentions? }` | `{ ok, message_id, timestamp }` |
+| POST | `/send/batch` | `{ messages: [ {chat_id, text? \| poll?, …} ] }` | `{ results: [...] }` |
 | GET | `/groups` | — | `{ groups: [ {id, name, participant_count, unread} ] }` |
 | GET | `/groups/:id` | — | `{ id, name, description, participants: [ {id, is_admin, is_agent} ] }` |
 | GET | `/groups/:id/history` | `?limit=50` (max 200) | `{ chat_id, messages: [...] }` |
 
-Status codes: `400` bad input, `401` bad token, `404` unknown chat, `503`
-client not ready.
+`poll` is `{ "name": "...", "options": ["A", "B"], "allow_multiple_answers": false }`
+(`options` needs at least 2 entries). Exactly one of `text` or `poll` is
+required per message. Status codes: `400` bad input, `401` bad token, `404`
+unknown chat, `503` client not ready.
 
 ### Verifying the signature from the brain (FastAPI)
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPayload } from '../src/payload.js';
+import { buildPayload, buildPollVotePayload } from '../src/payload.js';
 
 function makeMsg(overrides = {}) {
   return {
@@ -117,4 +117,47 @@ test('media includes base64 data when forwardMedia is set', async () => {
     filename: null,
     data_base64: 'base64data',
   });
+});
+
+function makeVote(overrides = {}) {
+  return {
+    voter: '14165551234@c.us',
+    selectedOptions: [{ name: 'Hotel B', localId: 1 }],
+    interractedAtTs: 1759400000000,
+    parentMessage: { id: { _serialized: 'poll_msg_id' }, pollName: 'Where should we stay?' },
+    client: { getContactById: async () => ({ pushname: 'Priya', number: '14165551234' }) },
+    ...overrides,
+  };
+}
+
+test('buildPollVotePayload produces the poll_vote event shape', async () => {
+  const payload = await buildPollVotePayload(makeVote(), makeGroupChat(), '1555@c.us');
+  assert.equal(payload.event, 'poll_vote');
+  assert.equal(payload.channel, 'whatsapp');
+  assert.equal(payload.chat.id, '1203@g.us');
+  assert.equal(payload.voter.id, '14165551234@c.us');
+  assert.equal(payload.voter.name, 'Priya');
+  assert.equal(payload.poll_message_id, 'poll_msg_id');
+  assert.equal(payload.poll_name, 'Where should we stay?');
+  assert.deepEqual(payload.selected_options, ['Hotel B']);
+  assert.equal(payload.agent_id, '1555@c.us');
+  assert.equal(payload.timestamp, 1759400000);
+});
+
+test('buildPollVotePayload reports an empty array when all options are deselected', async () => {
+  const payload = await buildPollVotePayload(makeVote({ selectedOptions: [] }), makeGroupChat(), null);
+  assert.deepEqual(payload.selected_options, []);
+});
+
+test('buildPollVotePayload falls back to the bare id when contact lookup fails', async () => {
+  const vote = makeVote({
+    client: {
+      getContactById: async () => {
+        throw new Error('not found');
+      },
+    },
+  });
+  const payload = await buildPollVotePayload(vote, makeGroupChat(), null);
+  assert.equal(payload.voter.name, '14165551234@c.us');
+  assert.equal(payload.voter.phone, '14165551234');
 });
