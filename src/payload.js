@@ -39,6 +39,30 @@ export function contactDisplayName(contact, fallback) {
   return '';
 }
 
+export function stripOutboundTags(text, members = []) {
+  let out = String(text || '');
+  const list = (members || []).filter((m) => m && (m.id || m.name));
+  list.sort((a, b) => String(b.id || '').length - String(a.id || '').length);
+  for (const m of list) {
+    const id = String(m.id || '');
+    const user = id.includes('@') ? id.slice(0, id.indexOf('@')) : id;
+    if (id) {
+      out = out.split(`@${id}`).join(' ').split(id).join(' ');
+    }
+    if (user && user.length >= 6) {
+      out = out.split(`@${user}`).join(' ');
+    }
+    const n = firstName(m.name);
+    if (n.length >= 2) {
+      out = out.replace(new RegExp(`@${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), '');
+    }
+  }
+  out = out.replace(/@?[A-Za-z0-9._+-]+@(?:c\.us|g\.us|lid|s\.whatsapp\.net)/gi, '');
+  out = out.replace(/@\d{6,}/g, '');
+  out = out.replace(/@[A-Za-z][\w'-]*/g, '');
+  return out.replace(/[^\S\n]{2,}/g, ' ').replace(/ +\n/g, '\n').trim();
+}
+
 export function humanizeChatText(text, members = []) {
   let out = String(text || '');
   const list = (members || []).filter((m) => m && contactDisplayName({ name: m.name }, m.name));
@@ -56,11 +80,6 @@ export function humanizeChatText(text, members = []) {
   }
   out = out.replace(/@?[A-Za-z0-9._+-]+@(?:c\.us|g\.us|lid|s\.whatsapp\.net)/gi, '');
   out = out.replace(/@\d{6,}/g, '');
-  for (const m of list) {
-    const n = firstName(m.name);
-    if (n.length < 2) continue;
-    out = out.replace(new RegExp(`@${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), n);
-  }
   return out.replace(/[^\S\n]{2,}/g, ' ').trim();
 }
 

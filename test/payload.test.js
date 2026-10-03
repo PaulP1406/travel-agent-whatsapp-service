@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPayload, buildPollVotePayload, humanizeChatText } from '../src/payload.js';
+import { buildPayload, buildPollVotePayload, humanizeChatText, stripOutboundTags } from '../src/payload.js';
 
 function makeMsg(overrides = {}) {
   return {
@@ -48,12 +48,12 @@ test('WhatsApp mention ids in the body are rewritten to first names', async () =
   assert.equal(payload.text, 'hey Priya can you make it');
 });
 
-test('humanizeChatText never leaves @c.us / @g.us tags', () => {
+test('outbound messages drop @tags instead of turning them into names', () => {
   assert.equal(
-    humanizeChatText('ping @14165551234@c.us and 1203@g.us', [
+    stripOutboundTags('hey @Priya and @14165551234@c.us', [
       { id: '14165551234@c.us', name: 'Priya Shah' },
     ]),
-    'ping Priya and',
+    'hey and',
   );
 });
 

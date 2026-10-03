@@ -3,7 +3,7 @@ import qrcode from 'qrcode-terminal';
 import { config } from './config.js';
 import { logger, errInfo } from './logger.js';
 import { forwardToBrain } from './brain.js';
-import { buildPayload, buildPollVotePayload, listChatMembers, humanizeChatText } from './payload.js';
+import { buildPayload, buildPollVotePayload, listChatMembers, stripOutboundTags } from './payload.js';
 
 const { Client, LocalAuth, Poll } = pkg;
 
@@ -143,9 +143,9 @@ async function doSend({ chatId, text, poll, replyToMessageId, mentions }) {
   if (typeof text === 'string' && text && !poll) {
     try {
       const members = await listChatMembers(chat, state.selfId);
-      text = humanizeChatText(text, members);
+      text = stripOutboundTags(text, members);
     } catch {
-      text = humanizeChatText(text, []);
+      text = stripOutboundTags(text, []);
     }
   }
 
