@@ -10,15 +10,19 @@ import { logger, errInfo } from './logger.js';
 // existing field name, per its CONTRACTS.md) or `chat_id` (this service's
 // own naming elsewhere, e.g. /groups/:id) — whichever the caller sends.
 function parseSendBody(body) {
-  const { group_id: groupId, chat_id: chatId, text, poll, reply_to_message_id: replyToMessageId, mentions } =
+  const { group_id: groupId, chat_id: chatId, text, poll, media, reply_to_message_id: replyToMessageId, mentions } =
     body ?? {};
   const id = groupId ?? chatId;
   if (!id) return { error: 'group_id is required' };
 
   const hasText = typeof text === 'string' && text.length > 0;
   const hasPoll = poll && typeof poll === 'object';
-  if (hasText === hasPoll) {
-    return { error: 'exactly one of text or poll is required' };
+  const hasMedia = media && typeof media === 'object' && (media.url || media.data_base64);
+  if (hasPoll && (hasText || hasMedia)) {
+    return { error: 'poll cannot be combined with text or media' };
+  }
+  if (!hasPoll && !hasText && !hasMedia) {
+    return { error: 'text, poll, or media is required' };
   }
   if (hasPoll) {
     if (typeof poll.name !== 'string' || !poll.name) {
@@ -35,6 +39,14 @@ function parseSendBody(body) {
       text: hasText ? text : undefined,
       poll: hasPoll
         ? { name: poll.name, options: poll.options, allowMultipleAnswers: !!poll.allow_multiple_answers }
+        : undefined,
+      media: hasMedia
+        ? {
+            url: media.url,
+            mimetype: media.mimetype,
+            filename: media.filename,
+            data_base64: media.data_base64,
+          }
         : undefined,
       replyToMessageId,
       mentions,

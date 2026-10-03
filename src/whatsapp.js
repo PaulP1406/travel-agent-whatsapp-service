@@ -5,7 +5,7 @@ import { logger, errInfo } from './logger.js';
 import { forwardToBrain, reportWhatsAppSession } from './brain.js';
 import { buildPayload, buildPollVotePayload, listChatMembers, stripOutboundTags } from './payload.js';
 
-const { Client, LocalAuth, Poll } = pkg;
+const { Client, LocalAuth, Poll, MessageMedia } = pkg;
 
 export const state = {
   client: null,
@@ -157,7 +157,7 @@ async function processQueue() {
   processing = false;
 }
 
-async function doSend({ chatId, text, poll, replyToMessageId, mentions }) {
+async function doSend({ chatId, text, poll, replyToMessageId, mentions, media }) {
   if (!state.ready) {
     const err = new Error('client not ready');
     err.statusCode = 503;
@@ -191,13 +191,26 @@ async function doSend({ chatId, text, poll, replyToMessageId, mentions }) {
     }
   }
 
-  // A poll-creation message's own body resolves to its pollName (see
-  // whatsapp-web.js Message.js: `data.body || data.pollName || ...`), so match
-  // on that for the own-sent loop guard — it's what message_create will see.
-  const content = poll
-    ? new Poll(poll.name, poll.options, { allowMultipleAnswers: !!poll.allowMultipleAnswers })
-    : text;
-  markOwnSending(chatId, poll ? poll.name : text);
+  let content;
+  if (poll) {
+    content = new Poll(poll.name, poll.options, { allowMultipleAnswers: !!poll.allowMultipleAnswers });
+    markOwnSending(chatId, poll.name);
+  } else if (media?.url || media?.data_base64) {
+    if (media.url) {
+      content = await MessageMedia.fromUrl(media.url, { unsafeMime: true });
+    } else {
+      content = new MessageMedia(
+        media.mimetype || 'image/jpeg',
+        media.data_base64,
+        media.filename || 'photo.jpg',
+      );
+    }
+    if (text) options.caption = text;
+    markOwnSending(chatId, text || media.filename || 'photo');
+  } else {
+    content = text;
+    markOwnSending(chatId, text);
+  }
 
   const sentMsg = await chat.sendMessage(content, options);
   await stopTyping(chatId);
