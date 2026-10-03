@@ -9,16 +9,59 @@ function serializedId(id) {
   return id._serialized || id.$1 || '';
 }
 
-function contactDisplayName(contact, fallback) {
-  if (!contact) return fallback;
-  return (
-    contact.name ||
-    contact.pushname ||
-    contact.shortName ||
-    contact.notifyName ||
-    contact.number ||
-    fallback
-  );
+export function looksLikeWhatsAppId(value) {
+  if (!value || typeof value !== 'string') return false;
+  return /@(c\.us|g\.us|lid|s\.whatsapp\.net)\b/i.test(value);
+}
+
+export function firstName(name) {
+  const s = String(name || '').trim();
+  if (!s || looksLikeWhatsAppId(s)) return '';
+  return s.split(/\s+/)[0];
+}
+
+function isBarePhone(value) {
+  return /^\d{6,}$/.test(String(value || '').trim());
+}
+
+export function contactDisplayName(contact, fallback) {
+  const candidates = [
+    contact?.name,
+    contact?.pushname,
+    contact?.shortName,
+    contact?.notifyName,
+    fallback,
+  ];
+  for (const raw of candidates) {
+    const s = String(raw || '').trim();
+    if (s && !looksLikeWhatsAppId(s) && !isBarePhone(s)) return s;
+  }
+  return '';
+}
+
+export function humanizeChatText(text, members = []) {
+  let out = String(text || '');
+  const list = (members || []).filter((m) => m && contactDisplayName({ name: m.name }, m.name));
+  list.sort((a, b) => String(b.id || '').length - String(a.id || '').length);
+  for (const m of list) {
+    const name = firstName(m.name) || m.name;
+    const id = String(m.id || '');
+    const user = id.includes('@') ? id.slice(0, id.indexOf('@')) : id;
+    if (id) {
+      out = out.split(`@${id}`).join(name).split(id).join(name);
+    }
+    if (user && user.length >= 6) {
+      out = out.split(`@${user}`).join(name);
+    }
+  }
+  out = out.replace(/@?[A-Za-z0-9._+-]+@(?:c\.us|g\.us|lid|s\.whatsapp\.net)/gi, '');
+  out = out.replace(/@\d{6,}/g, '');
+  for (const m of list) {
+    const n = firstName(m.name);
+    if (n.length < 2) continue;
+    out = out.replace(new RegExp(`@${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), n);
+  }
+  return out.replace(/[^\S\n]{2,}/g, ' ').trim();
 }
 
 export async function listChatMembers(chat, selfId) {
@@ -38,7 +81,7 @@ export async function listChatMembers(chat, selfId) {
     }
     members.push({
       id,
-      name: contactDisplayName(contact, id),
+      name: contactDisplayName(contact, ''),
       is_admin: !!(p.isAdmin || p.isSuperAdmin),
       is_agent: id === selfId,
     });
@@ -46,16 +89,20 @@ export async function listChatMembers(chat, selfId) {
   return members;
 }
 
-async function getMentionedIds(msg) {
+async function getMentionMembers(msg) {
   if (typeof msg.getMentions === 'function') {
     try {
       const mentions = await msg.getMentions();
-      return mentions.map((m) => serializedId(m.id));
+      return mentions.map((m) => ({
+        id: serializedId(m.id),
+        name: contactDisplayName(m, ''),
+      }));
     } catch {
       // fall through to the raw field below
     }
   }
-  return msg.mentionedIds ?? [];
+  const ids = msg.mentionedIds ?? [];
+  return ids.map((id) => ({ id: serializedId(id), name: '' }));
 }
 
 // Field names match the orchestrator's existing CONTRACTS.md (flat group_id /
@@ -70,9 +117,8 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
   // Group messages you send yourself (ALLOW_SELF_MESSAGES testing) have no
   // msg.author — fall back to selfId instead of misattributing to the group.
   const senderId = isGroup ? msg.author || (msg.fromMe ? selfId : msg.from) : msg.from;
-  const mentionedIds = await getMentionedIds(msg);
-  const tagged = !!selfId && mentionedIds.includes(selfId);
-  const senderName = contactDisplayName(contact, senderId);
+  const mentionMembers = await getMentionMembers(msg);
+  const mentionedIds = mentionMembers.map((m) => m.id).filter(Boolean);
 
   let quoted = null;
   if (msg.hasQuotedMsg) {
@@ -84,6 +130,15 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
       from_me: !!q.fromMe,
     };
   }
+
+  const tagged =
+    (!!selfId && mentionedIds.includes(selfId)) || !!(quoted && quoted.from_me);
+  const senderName = contactDisplayName(contact, '') || 'Someone';
+  const rawText = msg.body ?? '';
+  const wantRoster = includeRoster ?? (isGroup && tagged);
+  const needsNames = wantRoster || /@/.test(rawText) || looksLikeWhatsAppId(rawText);
+  const participants = isGroup && needsNames ? await listChatMembers(chat, selfId) : [];
+  const text = humanizeChatText(rawText, [...mentionMembers, ...participants]);
 
   let media = null;
   if (msg.hasMedia) {
@@ -101,9 +156,6 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
     }
   }
 
-  const wantRoster = includeRoster ?? (isGroup && tagged);
-  const participants = wantRoster ? await listChatMembers(chat, selfId) : [];
-
   return {
     event: 'message',
     channel: 'whatsapp',
@@ -113,13 +165,13 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
     sender_id: senderId,
     sender_name: senderName,
     sender_phone: contact?.number ?? senderId?.split('@')[0],
-    text: msg.body ?? '',
+    text,
     tagged,
     timestamp: msg.timestamp,
     type: msg.type ?? 'chat',
     is_group: isGroup,
     participant_count: isGroup ? chat.participants?.length ?? null : null,
-    participants,
+    participants: wantRoster ? participants : [],
     mentioned_ids: mentionedIds,
     quoted,
     media,
@@ -149,7 +201,7 @@ export async function buildPollVotePayload(vote, chat, selfId) {
     group_id: serializedId(chat.id),
     group_name: chat.name,
     voter_id: vote.voter,
-    voter_name: contactDisplayName(contact, vote.voter),
+    voter_name: contactDisplayName(contact, '') || 'Someone',
     voter_phone: contact?.number ?? vote.voter?.split('@')[0],
     poll_message_id: serializedId(vote.parentMessage?.id) || null,
     poll_name: vote.parentMessage?.pollName ?? null,

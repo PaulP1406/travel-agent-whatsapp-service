@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPayload, buildPollVotePayload } from '../src/payload.js';
+import { buildPayload, buildPollVotePayload, humanizeChatText } from '../src/payload.js';
 
 function makeMsg(overrides = {}) {
   return {
@@ -37,6 +37,26 @@ function makeDmChat(overrides = {}) {
   };
 }
 
+test('WhatsApp mention ids in the body are rewritten to first names', async () => {
+  const msg = makeMsg({
+    body: 'hey @14165551234 can you make it',
+    getMentions: async () => [
+      { id: { _serialized: '14165551234@c.us' }, name: 'Priya Shah' },
+    ],
+  });
+  const payload = await buildPayload(msg, makeGroupChat(), '1555@c.us');
+  assert.equal(payload.text, 'hey Priya can you make it');
+});
+
+test('humanizeChatText never leaves @c.us / @g.us tags', () => {
+  assert.equal(
+    humanizeChatText('ping @14165551234@c.us and 1203@g.us', [
+      { id: '14165551234@c.us', name: 'Priya Shah' },
+    ]),
+    'ping Priya and',
+  );
+});
+
 test('buildPayload produces the flat orchestrator contract shape', async () => {
   const payload = await buildPayload(makeMsg(), makeGroupChat(), '1555@c.us');
 
@@ -54,6 +74,21 @@ test('buildPayload produces the flat orchestrator contract shape', async () => {
   assert.equal(payload.quoted, null);
   assert.equal(payload.media, null);
   assert.deepEqual(payload.participants, []);
+});
+
+test('a reply to the bot counts as tagged', async () => {
+  const msg = makeMsg({
+    getMentions: async () => [],
+    hasQuotedMsg: true,
+    getQuotedMessage: async () => ({
+      id: { _serialized: 'bot_msg' },
+      fromMe: true,
+      body: 'Reply 1, 2, or 3.',
+    }),
+  });
+  const payload = await buildPayload(msg, makeGroupChat(), '1555@c.us');
+  assert.equal(payload.tagged, true);
+  assert.equal(payload.quoted.from_me, true);
 });
 
 test('tagged is true only when selfId is among the mentioned ids', async () => {
@@ -186,6 +221,6 @@ test('buildPollVotePayload falls back to the bare id when contact lookup fails',
     },
   });
   const payload = await buildPollVotePayload(vote, makeGroupChat(), null);
-  assert.equal(payload.voter_name, '14165551234@c.us');
+  assert.equal(payload.voter_name, 'Someone');
   assert.equal(payload.voter_phone, '14165551234');
 });

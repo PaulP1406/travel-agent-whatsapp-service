@@ -3,7 +3,7 @@ import qrcode from 'qrcode-terminal';
 import { config } from './config.js';
 import { logger, errInfo } from './logger.js';
 import { forwardToBrain } from './brain.js';
-import { buildPayload, buildPollVotePayload, listChatMembers } from './payload.js';
+import { buildPayload, buildPollVotePayload, listChatMembers, humanizeChatText } from './payload.js';
 
 const { Client, LocalAuth, Poll } = pkg;
 
@@ -139,6 +139,15 @@ async function doSend({ chatId, text, poll, replyToMessageId, mentions }) {
   const options = {};
   if (mentions?.length) options.mentions = mentions;
   if (replyToMessageId) options.quotedMessageId = replyToMessageId;
+
+  if (typeof text === 'string' && text && !poll) {
+    try {
+      const members = await listChatMembers(chat, state.selfId);
+      text = humanizeChatText(text, members);
+    } catch {
+      text = humanizeChatText(text, []);
+    }
+  }
 
   // A poll-creation message's own body resolves to its pollName (see
   // whatsapp-web.js Message.js: `data.body || data.pollName || ...`), so match
