@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPayload, buildPollVotePayload, humanizeChatText, stripOutboundTags } from '../src/payload.js';
+import { buildPayload, buildPollVotePayload, rewriteOutboundMentions } from '../src/payload.js';
 
 function makeMsg(overrides = {}) {
   return {
@@ -37,7 +37,7 @@ function makeDmChat(overrides = {}) {
   };
 }
 
-test('WhatsApp mention ids in the body are rewritten to first names', async () => {
+test('WhatsApp mention ids in the body are rewritten to @Full Name', async () => {
   const msg = makeMsg({
     body: 'hey @14165551234 can you make it',
     getMentions: async () => [
@@ -45,16 +45,15 @@ test('WhatsApp mention ids in the body are rewritten to first names', async () =
     ],
   });
   const payload = await buildPayload(msg, makeGroupChat(), '1555@c.us');
-  assert.equal(payload.text, 'hey Priya can you make it');
+  assert.equal(payload.text, 'hey @Priya Shah can you make it');
 });
 
-test('outbound messages drop @tags instead of turning them into names', () => {
-  assert.equal(
-    stripOutboundTags('hey @Priya and @14165551234@c.us', [
-      { id: '14165551234@c.us', name: 'Priya Shah' },
-    ]),
-    'hey and',
-  );
+test('outbound messages keep @Full Name and rewrite ids onto that name', () => {
+  const out = rewriteOutboundMentions('hey @Priya and @14165551234@c.us', [
+    { id: '14165551234@c.us', name: 'Priya Shah' },
+  ]);
+  assert.equal(out.text, 'hey @Priya Shah and @Priya Shah');
+  assert.deepEqual(out.mentions, ['14165551234@c.us']);
 });
 
 test('buildPayload produces the flat orchestrator contract shape', async () => {

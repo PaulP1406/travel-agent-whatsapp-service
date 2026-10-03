@@ -39,47 +39,103 @@ export function contactDisplayName(contact, fallback) {
   return '';
 }
 
-export function stripOutboundTags(text, members = []) {
+function memberDisplayName(member) {
+  return contactDisplayName({ name: member?.name }, member?.name);
+}
+
+function mentionAliases(members) {
+  const aliases = [];
+  for (const m of members || []) {
+    if (!m || m.is_agent) continue;
+    const full = memberDisplayName(m);
+    if (!full) continue;
+    aliases.push({ key: full, member: m });
+    const first = firstName(full);
+    if (first && first.toLowerCase() !== full.toLowerCase()) {
+      aliases.push({ key: first, member: m });
+    }
+  }
+  aliases.sort((a, b) => b.key.length - a.key.length);
+  return aliases;
+}
+
+function replaceIdsWithNameTags(text, members) {
   let out = String(text || '');
-  const list = (members || []).filter((m) => m && (m.id || m.name));
-  list.sort((a, b) => String(b.id || '').length - String(a.id || '').length);
-  for (const m of list) {
+  const mentioned = [];
+  const seen = new Set();
+  const named = (members || []).filter((m) => m && memberDisplayName(m) && !m.is_agent);
+  named.sort((a, b) => String(b.id || '').length - String(a.id || '').length);
+  for (const m of named) {
+    const tag = `@${memberDisplayName(m)}`;
     const id = String(m.id || '');
     const user = id.includes('@') ? id.slice(0, id.indexOf('@')) : id;
-    if (id) {
-      out = out.split(`@${id}`).join(' ').split(id).join(' ');
+    let hit = false;
+    if (id && (out.includes(`@${id}`) || out.includes(id))) {
+      out = out.split(`@${id}`).join(tag).split(id).join(tag);
+      hit = true;
     }
-    if (user && user.length >= 6) {
-      out = out.split(`@${user}`).join(' ');
+    if (user && user.length >= 6 && out.includes(`@${user}`)) {
+      out = out.split(`@${user}`).join(tag);
+      hit = true;
     }
-    const n = firstName(m.name);
-    if (n.length >= 2) {
-      out = out.replace(new RegExp(`@${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), '');
+    if (hit && m.id && !seen.has(m.id)) {
+      seen.add(m.id);
+      mentioned.push(m.id);
     }
   }
   out = out.replace(/@?[A-Za-z0-9._+-]+@(?:c\.us|g\.us|lid|s\.whatsapp\.net)/gi, '');
   out = out.replace(/@\d{6,}/g, '');
-  out = out.replace(/@[A-Za-z][\w'-]*/g, '');
+  return { text: out, mentioned, seen };
+}
+
+function expandNameMentions(text, members, mentioned, seen) {
+  const aliases = mentionAliases(members);
+  let i = 0;
+  let out = '';
+  while (i < text.length) {
+    if (text[i] !== '@') {
+      out += text[i];
+      i += 1;
+      continue;
+    }
+    const rest = text.slice(i + 1);
+    const hit = aliases.find(({ key }) => {
+      if (!rest.toLowerCase().startsWith(key.toLowerCase())) return false;
+      const next = rest.charAt(key.length);
+      return !next || !/[\w']/.test(next);
+    });
+    if (!hit) {
+      out += '@';
+      i += 1;
+      continue;
+    }
+    const full = memberDisplayName(hit.member);
+    out += `@${full}`;
+    i += 1 + hit.key.length;
+    if (hit.member.id && !seen.has(hit.member.id)) {
+      seen.add(hit.member.id);
+      mentioned.push(hit.member.id);
+    }
+  }
   return out.replace(/[^\S\n]{2,}/g, ' ').replace(/ +\n/g, '\n').trim();
 }
 
+// Keep @Display Name pings. Rewrite WhatsApp IDs / phone mentions onto that name
+// and return the contact ids WhatsApp needs to actually notify them.
+export function rewriteOutboundMentions(text, members = []) {
+  const { text: withNames, mentioned, seen } = replaceIdsWithNameTags(text, members);
+  return {
+    text: expandNameMentions(withNames, members, mentioned, seen),
+    mentions: mentioned,
+  };
+}
+
+export function stripOutboundTags(text, members = []) {
+  return rewriteOutboundMentions(text, members).text;
+}
+
 export function humanizeChatText(text, members = []) {
-  let out = String(text || '');
-  const list = (members || []).filter((m) => m && contactDisplayName({ name: m.name }, m.name));
-  list.sort((a, b) => String(b.id || '').length - String(a.id || '').length);
-  for (const m of list) {
-    const name = firstName(m.name) || m.name;
-    const id = String(m.id || '');
-    const user = id.includes('@') ? id.slice(0, id.indexOf('@')) : id;
-    if (id) {
-      out = out.split(`@${id}`).join(name).split(id).join(name);
-    }
-    if (user && user.length >= 6) {
-      out = out.split(`@${user}`).join(name);
-    }
-  }
-  out = out.replace(/@?[A-Za-z0-9._+-]+@(?:c\.us|g\.us|lid|s\.whatsapp\.net)/gi, '');
-  out = out.replace(/@\d{6,}/g, '');
+  const { text: out } = replaceIdsWithNameTags(text, members);
   return out.replace(/[^\S\n]{2,}/g, ' ').trim();
 }
 

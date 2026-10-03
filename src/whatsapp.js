@@ -3,7 +3,7 @@ import qrcode from 'qrcode-terminal';
 import { config } from './config.js';
 import { logger, errInfo } from './logger.js';
 import { forwardToBrain, reportWhatsAppSession } from './brain.js';
-import { buildPayload, buildPollVotePayload, listChatMembers, stripOutboundTags } from './payload.js';
+import { buildPayload, buildPollVotePayload, listChatMembers, rewriteOutboundMentions } from './payload.js';
 
 const { Client, LocalAuth, Poll, MessageMedia } = pkg;
 
@@ -179,16 +179,21 @@ async function doSend({ chatId, text, poll, replyToMessageId, mentions, media })
   }
 
   const options = {};
-  if (mentions?.length) options.mentions = mentions;
   if (replyToMessageId) options.quotedMessageId = replyToMessageId;
 
   if (typeof text === 'string' && text && !poll) {
+    let rewritten = { text, mentions: [] };
     try {
       const members = await listChatMembers(chat, state.selfId);
-      text = stripOutboundTags(text, members);
+      rewritten = rewriteOutboundMentions(text, members);
     } catch {
-      text = stripOutboundTags(text, []);
+      rewritten = rewriteOutboundMentions(text, []);
     }
+    text = rewritten.text;
+    const ids = [...new Set([...(mentions || []), ...(rewritten.mentions || [])])].filter(Boolean);
+    if (ids.length) options.mentions = ids;
+  } else if (mentions?.length) {
+    options.mentions = mentions;
   }
 
   let content;
