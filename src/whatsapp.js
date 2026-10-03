@@ -3,7 +3,7 @@ import qrcode from 'qrcode-terminal';
 import { config } from './config.js';
 import { logger, errInfo } from './logger.js';
 import { forwardToBrain } from './brain.js';
-import { buildPayload, buildPollVotePayload } from './payload.js';
+import { buildPayload, buildPollVotePayload, listChatMembers } from './payload.js';
 
 const { Client, LocalAuth, Poll } = pkg;
 
@@ -193,15 +193,12 @@ export async function getGroup(id) {
     err.statusCode = 404;
     throw err;
   }
+  const members = await listChatMembers(chat, state.selfId);
   return {
     id: chat.id._serialized,
     name: chat.name,
     description: chat.description ?? '',
-    participants: (chat.participants ?? []).map((p) => ({
-      id: p.id._serialized,
-      is_admin: !!p.isAdmin,
-      is_agent: p.id._serialized === state.selfId,
-    })),
+    participants: members,
   };
 }
 

@@ -53,6 +53,7 @@ test('buildPayload produces the flat orchestrator contract shape', async () => {
   assert.equal(payload.agent_id, '1555@c.us');
   assert.equal(payload.quoted, null);
   assert.equal(payload.media, null);
+  assert.deepEqual(payload.participants, []);
 });
 
 test('tagged is true only when selfId is among the mentioned ids', async () => {
@@ -64,6 +65,31 @@ test('tagged is true only when selfId is among the mentioned ids', async () => {
 
   const untagged = await buildPayload(msg, chat, '9999@c.us');
   assert.equal(untagged.tagged, false);
+});
+
+test('tagged group messages include a named roster of members', async () => {
+  const msg = makeMsg({
+    getMentions: async () => [{ id: { _serialized: '1555@c.us' } }],
+  });
+  const chat = makeGroupChat({
+    participants: [
+      {
+        id: { _serialized: '14165551234@c.us' },
+        isAdmin: true,
+        getContact: async () => ({ name: 'Priya', number: '14165551234' }),
+      },
+      {
+        id: { _serialized: '1555@c.us' },
+        getContact: async () => ({ pushname: 'Fare' }),
+      },
+    ],
+  });
+  const payload = await buildPayload(msg, chat, '1555@c.us');
+  assert.equal(payload.tagged, true);
+  assert.deepEqual(payload.participants, [
+    { id: '14165551234@c.us', name: 'Priya', is_admin: true, is_agent: false },
+    { id: '1555@c.us', name: 'Fare', is_admin: false, is_agent: true },
+  ]);
 });
 
 test('group messages use msg.author as the sender id', async () => {

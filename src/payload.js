@@ -9,6 +9,43 @@ function serializedId(id) {
   return id._serialized || id.$1 || '';
 }
 
+function contactDisplayName(contact, fallback) {
+  if (!contact) return fallback;
+  return (
+    contact.name ||
+    contact.pushname ||
+    contact.shortName ||
+    contact.notifyName ||
+    contact.number ||
+    fallback
+  );
+}
+
+export async function listChatMembers(chat, selfId) {
+  const parts = Array.isArray(chat.participants) ? chat.participants : [];
+  const members = [];
+  for (const p of parts) {
+    if (!p || typeof p !== 'object' || Array.isArray(p) || !p.id) continue;
+    const id = serializedId(p.id);
+    if (!id) continue;
+    let contact = null;
+    if (typeof p.getContact === 'function') {
+      try {
+        contact = await p.getContact();
+      } catch {
+        // fall through
+      }
+    }
+    members.push({
+      id,
+      name: contactDisplayName(contact, id),
+      is_admin: !!(p.isAdmin || p.isSuperAdmin),
+      is_agent: id === selfId,
+    });
+  }
+  return members;
+}
+
 async function getMentionedIds(msg) {
   if (typeof msg.getMentions === 'function') {
     try {
@@ -27,7 +64,7 @@ async function getMentionedIds(msg) {
 // fields (mentioned_ids, quoted, media, agent_id, ...) ride along for brains
 // that want them; Go's json.Decode silently ignores fields it doesn't know.
 export async function buildPayload(msg, chat, selfId, opts = {}) {
-  const { forwardMedia = false } = opts;
+  const { forwardMedia = false, includeRoster } = opts;
   const contact = await msg.getContact();
   const isGroup = !!chat.isGroup;
   // Group messages you send yourself (ALLOW_SELF_MESSAGES testing) have no
@@ -35,6 +72,7 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
   const senderId = isGroup ? msg.author || (msg.fromMe ? selfId : msg.from) : msg.from;
   const mentionedIds = await getMentionedIds(msg);
   const tagged = !!selfId && mentionedIds.includes(selfId);
+  const senderName = contactDisplayName(contact, senderId);
 
   let quoted = null;
   if (msg.hasQuotedMsg) {
@@ -63,6 +101,9 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
     }
   }
 
+  const wantRoster = includeRoster ?? (isGroup && tagged);
+  const participants = wantRoster ? await listChatMembers(chat, selfId) : [];
+
   return {
     event: 'message',
     channel: 'whatsapp',
@@ -70,7 +111,7 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
     group_id: serializedId(chat.id),
     group_name: chat.name,
     sender_id: senderId,
-    sender_name: contact?.pushname || contact?.name || contact?.number || senderId,
+    sender_name: senderName,
     sender_phone: contact?.number ?? senderId?.split('@')[0],
     text: msg.body ?? '',
     tagged,
@@ -78,6 +119,7 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
     type: msg.type ?? 'chat',
     is_group: isGroup,
     participant_count: isGroup ? chat.participants?.length ?? null : null,
+    participants,
     mentioned_ids: mentionedIds,
     quoted,
     media,
@@ -107,7 +149,7 @@ export async function buildPollVotePayload(vote, chat, selfId) {
     group_id: serializedId(chat.id),
     group_name: chat.name,
     voter_id: vote.voter,
-    voter_name: contact?.pushname || contact?.name || contact?.number || vote.voter,
+    voter_name: contactDisplayName(contact, vote.voter),
     voter_phone: contact?.number ?? vote.voter?.split('@')[0],
     poll_message_id: serializedId(vote.parentMessage?.id) || null,
     poll_name: vote.parentMessage?.pollName ?? null,
