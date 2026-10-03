@@ -103,7 +103,7 @@ Body:
   "sender_id": "14165551234@c.us",
   "sender_name": "Priya",
   "sender_phone": "14165551234",
-  "text": "@Yate figure this out",
+  "text": "@Fare figure this out",
   "tagged": true,
   "timestamp": 1759400000,
   "type": "chat",

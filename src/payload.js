@@ -3,11 +3,17 @@ function mapMediaType(type) {
   return type || 'unknown';
 }
 
+function serializedId(id) {
+  if (id == null) return '';
+  if (typeof id === 'string') return id;
+  return id._serialized || id.$1 || '';
+}
+
 async function getMentionedIds(msg) {
   if (typeof msg.getMentions === 'function') {
     try {
       const mentions = await msg.getMentions();
-      return mentions.map((m) => m.id?._serialized ?? m.id);
+      return mentions.map((m) => serializedId(m.id));
     } catch {
       // fall through to the raw field below
     }
@@ -34,7 +40,7 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
   if (msg.hasQuotedMsg) {
     const q = await msg.getQuotedMessage();
     quoted = {
-      id: q.id?._serialized ?? q.id,
+      id: serializedId(q.id),
       sender_id: q.author || q.from,
       text: q.body || '',
       from_me: !!q.fromMe,
@@ -60,8 +66,8 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
   return {
     event: 'message',
     channel: 'whatsapp',
-    message_id: msg.id?._serialized ?? msg.id,
-    group_id: chat.id?._serialized ?? chat.id,
+    message_id: serializedId(msg.id) || msg.id,
+    group_id: serializedId(chat.id),
     group_name: chat.name,
     sender_id: senderId,
     sender_name: contact?.pushname || contact?.name || contact?.number || senderId,
@@ -98,12 +104,12 @@ export async function buildPollVotePayload(vote, chat, selfId) {
   return {
     event: 'poll_vote',
     channel: 'whatsapp',
-    group_id: chat.id?._serialized ?? chat.id,
+    group_id: serializedId(chat.id),
     group_name: chat.name,
     voter_id: vote.voter,
     voter_name: contact?.pushname || contact?.name || contact?.number || vote.voter,
     voter_phone: contact?.number ?? vote.voter?.split('@')[0],
-    poll_message_id: vote.parentMessage?.id?._serialized ?? null,
+    poll_message_id: serializedId(vote.parentMessage?.id) || null,
     poll_name: vote.parentMessage?.pollName ?? null,
     selected_options: vote.selectedOptions.map((o) => o.name ?? String(o.localId)),
     agent_id: selfId,

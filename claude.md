@@ -95,7 +95,7 @@ Body:
   "timestamp": 1759400000,
   "chat":   { "id": "1203…@g.us", "name": "Lisbon trip", "is_group": true, "participant_count": 5 },
   "sender": { "id": "14165551234@c.us", "name": "Priya", "phone": "14165551234" },
-  "text": "@Yate figure this out",
+  "text": "@Fare figure this out",
   "type": "chat",
   "tagged": true,
   "mentioned_ids": ["1555…@c.us"],
