@@ -208,24 +208,36 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
 // existing agreement.
 export async function buildPollVotePayload(vote, chat, selfId) {
   let contact = null;
+  const voterId = serializedId(vote.voter) || String(vote.voter || '');
   try {
-    contact = await vote.client.getContactById(vote.voter);
+    if (voterId) {
+      contact = await vote.client.getContactById(voterId);
+    }
   } catch {
     // best effort — fall back to the bare id below
   }
+
+  const selected = (vote.selectedOptions || [])
+    .map((o) => o?.name ?? (o?.localId != null ? String(o.localId) : ''))
+    .filter((s) => s !== '');
 
   return {
     event: 'poll_vote',
     channel: 'whatsapp',
     group_id: serializedId(chat.id),
     group_name: chat.name,
-    voter_id: vote.voter,
+    voter_id: voterId,
     voter_name: contactDisplayName(contact, '') || 'Someone',
-    voter_phone: contact?.number ?? vote.voter?.split('@')[0],
-    poll_message_id: serializedId(vote.parentMessage?.id) || null,
+    voter_phone: contact?.number ?? voterId.split('@')[0],
+    poll_message_id:
+      serializedId(vote.parentMessage?.id) ||
+      serializedId(vote.parentMsgKey) ||
+      null,
     poll_name: vote.parentMessage?.pollName ?? null,
-    selected_options: vote.selectedOptions.map((o) => o.name ?? String(o.localId)),
+    selected_options: selected,
     agent_id: selfId,
-    timestamp: vote.interractedAtTs ? Math.floor(vote.interractedAtTs / 1000) : Math.floor(Date.now() / 1000),
+    timestamp: vote.interractedAtTs
+      ? Math.floor(vote.interractedAtTs / 1000)
+      : Math.floor(Date.now() / 1000),
   };
 }

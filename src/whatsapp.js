@@ -206,6 +206,11 @@ async function doSend({ chatId, text, poll, replyToMessageId, mentions }) {
     err.statusCode = 502;
     throw err;
   }
+  if (poll) {
+    await openChatForPollVotes(chatId);
+    const pollId = sentMsg.id?._serialized || sentMsg.id?.$1;
+    if (pollId) watchPollVotes(pollId);
+  }
   state.sent += 1;
   return { ok: true, message_id: sentMsg.id._serialized, timestamp: sentMsg.timestamp };
 }
@@ -314,6 +319,7 @@ async function handleIncomingMessage(msg) {
 
   const msgId = msg.id?._serialized ?? `${msg.from}:${msg.timestamp}`;
   if (markSeen(msgId)) return; // duplicate delivery from WhatsApp
+  if (msg.type === 'poll_creation') return;
 
   let payload;
   try {
@@ -356,13 +362,17 @@ async function sendBrainReply(chatId, quoteMessageId, result) {
 }
 
 async function handlePollVote(vote) {
-  const chat = await safeGetChat(vote.parentMessage);
+  const chat = await chatForVote(vote);
+  if (!chat) return;
   if (config.groupsOnly && !chat.isGroup) return;
   if (chat.isGroup && config.allowedGroupIds.length && !config.allowedGroupIds.includes(chat.id._serialized)) {
     return;
   }
 
   const payload = await buildPollVotePayload(vote, chat, state.selfId);
+  const dedupe = `pollvote:${payload.poll_message_id}:${payload.voter_id}:${payload.selected_options.join('|')}`;
+  if (markSeen(dedupe)) return;
+
   state.relayed += 1;
   logger.info(
     { group: payload.group_id, voter: payload.voter_id, poll: payload.poll_name, selected: payload.selected_options },
@@ -370,9 +380,82 @@ async function handlePollVote(vote) {
   );
   logger.debug({ payload }, 'full poll vote payload');
 
+  if (config.showTyping) startTyping(chat.id._serialized);
   const result = await forwardToBrain(payload);
 
   await sendBrainReply(chat.id._serialized, payload.poll_message_id, result);
+}
+
+async function chatForVote(vote) {
+  if (vote?.parentMessage) {
+    try {
+      return await safeGetChat(vote.parentMessage);
+    } catch (err) {
+      logger.warn({ err: errInfo(err) }, 'poll parent getChat failed');
+    }
+  }
+  const remote =
+    vote?.parentMsgKey?.remote ||
+    vote?.parentMessage?.id?.remote ||
+    vote?.parentMsgKey?._serialized ||
+    vote?.parentMsgKey?.$1;
+  if (!remote || !state.client) return null;
+  const id = typeof remote === 'string' ? remote : remote._serialized || remote.$1;
+  try {
+    return await state.client.getChatById(id);
+  } catch (err) {
+    logger.warn({ err: errInfo(err), id }, 'could not resolve chat for poll vote');
+    return null;
+  }
+}
+
+async function openChatForPollVotes(chatId) {
+  if (!state.client?.interface || !chatId) return;
+  try {
+    await state.client.interface.openChatWindow(chatId);
+    logger.info({ chatId }, 'opened chat to receive poll votes');
+  } catch (err) {
+    logger.warn({ err: errInfo(err), chatId }, 'could not open chat for poll votes');
+  }
+}
+
+const POLL_WATCH_MS = 30 * 60 * 1000;
+const POLL_WATCH_EVERY_MS = 2500;
+const watchedPolls = new Map();
+
+function watchPollVotes(messageId) {
+  if (!messageId || watchedPolls.has(messageId)) return;
+  const started = Date.now();
+  const tick = async () => {
+    if (!state.ready || Date.now() - started > POLL_WATCH_MS) {
+      clearInterval(interval);
+      watchedPolls.delete(messageId);
+      return;
+    }
+    try {
+      const votes = await state.client.getPollVotes(messageId);
+      for (const vote of votes || []) {
+        try {
+          await handlePollVote(vote);
+        } catch (err) {
+          logger.error({ err: errInfo(err) }, 'error handling watched poll vote');
+        }
+      }
+    } catch (err) {
+      logger.debug({ err: errInfo(err), messageId }, 'poll vote check failed');
+    }
+  };
+  const interval = setInterval(tick, POLL_WATCH_EVERY_MS);
+  watchedPolls.set(messageId, interval);
+  setTimeout(tick, 1200);
+}
+
+async function watchAllowedGroups() {
+  const ids = config.allowedGroupIds;
+  if (!ids.length) return;
+  for (const id of ids) {
+    await openChatForPollVotes(id);
+  }
 }
 
 export function createClient() {
@@ -409,6 +492,7 @@ export function createClient() {
     state.needsQr = false;
     reconnectAttempt = 0;
     logger.info({ agent_id: state.selfId }, 'WhatsApp client ready');
+    watchAllowedGroups().catch(() => {});
     reportWhatsAppSession({
       agent_id: state.selfId,
       status: 'ready',

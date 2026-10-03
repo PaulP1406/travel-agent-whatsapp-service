@@ -1,3 +1,35 @@
+diff --git a/node_modules/whatsapp-web.js/src/Client.js b/node_modules/whatsapp-web.js/src/Client.js
+index 800109e..6ea19f6 100644
+--- a/node_modules/whatsapp-web.js/src/Client.js
++++ b/node_modules/whatsapp-web.js/src/Client.js
+@@ -1205,14 +1205,20 @@ class Client extends EventEmitter {
+                             const parentMsgKey = vote.pollUpdateParentKey;
+                             const timestamp = vote.t / 1000;
+                             const sender = vote.author ?? vote.from;
+-                            const senderUserJid = sender._serialized;
+-
+-                            let parentMessage = Msg.get(
+-                                parentMsgKey._serialized,
+-                            );
+-                            if (!parentMessage) {
++                            const senderUserJid =
++                                (sender &&
++                                    (sender._serialized || sender.$1)) ||
++                                sender;
++                            const parentKeyId =
++                                parentMsgKey &&
++                                (parentMsgKey._serialized || parentMsgKey.$1);
++
++                            let parentMessage = parentKeyId
++                                ? Msg.get(parentKeyId)
++                                : null;
++                            if (!parentMessage && parentKeyId) {
+                                 const fetched = await Msg.getMessagesById([
+-                                    parentMsgKey._serialized,
++                                    parentKeyId,
+                                 ]);
+                                 parentMessage = fetched?.messages?.[0] || null;
+                             }
 diff --git a/node_modules/whatsapp-web.js/src/structures/Chat.js b/node_modules/whatsapp-web.js/src/structures/Chat.js
 index 40211bf..0859976 100644
 --- a/node_modules/whatsapp-web.js/src/structures/Chat.js
@@ -49,6 +81,63 @@ index dd977e8..afbee81 100644
  
          /**
           * ACK status for the message
+diff --git a/node_modules/whatsapp-web.js/src/structures/PollVote.js b/node_modules/whatsapp-web.js/src/structures/PollVote.js
+index 6851af8..4526848 100644
+--- a/node_modules/whatsapp-web.js/src/structures/PollVote.js
++++ b/node_modules/whatsapp-web.js/src/structures/PollVote.js
+@@ -26,7 +26,11 @@ class PollVote extends Base {
+          * The person who voted
+          * @type {string}
+          */
+-        this.voter = data.sender;
++        const sender = data.sender;
++        this.voter =
++            typeof sender === 'string'
++                ? sender
++                : sender?._serialized || sender?.$1 || data.senderUserJid || '';
+ 
+         /**
+          * The selected poll option(s)
+@@ -34,21 +38,13 @@ class PollVote extends Base {
+          * may occur when they deselected all poll options
+          * @type {SelectedPollOption[]}
+          */
+-        if (data.selectedOptionLocalIds.length > 0) {
+-            if (data.parentMessage) {
+-                // temporary failsafe
+-                this.selectedOptions = data.selectedOptionLocalIds.map((e) => ({
+-                    name: data.parentMessage.pollOptions.find(
+-                        (x) => x.localId === e,
+-                    ).name,
+-                    localId: e,
+-                }));
+-            } else {
+-                this.selectedOptions = data.selectedOptionLocalIds.map((e) => ({
+-                    name: undefined,
+-                    localId: e,
+-                }));
+-            }
++        const optionIds = data.selectedOptionLocalIds || [];
++        if (optionIds.length > 0) {
++            const pollOptions = data.parentMessage?.pollOptions || [];
++            this.selectedOptions = optionIds.map((e) => {
++                const hit = pollOptions.find((x) => x.localId === e);
++                return { name: hit?.name, localId: e };
++            });
+         } else {
+             this.selectedOptions = [];
+         }
+@@ -63,7 +59,9 @@ class PollVote extends Base {
+          * The poll creation message associated with the poll vote
+          * @type {Message}
+          */
+-        this.parentMessage = new Message(this.client, data.parentMessage);
++        this.parentMessage = data.parentMessage
++            ? new Message(this.client, data.parentMessage)
++            : null;
+ 
+         /**
+          * The poll creation message id
 diff --git a/node_modules/whatsapp-web.js/src/util/Injected/Utils.js b/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
 index 540078a..de05964 100644
 --- a/node_modules/whatsapp-web.js/src/util/Injected/Utils.js

@@ -20,7 +20,7 @@
     "pino": "^9.4.0",
     "pino-pretty": "^11.2.2",
     "qrcode-terminal": "^0.12.0",
-    "whatsapp-web.js": "^1.26.0"
+    "whatsapp-web.js": "1.34.7"
   },
   "devDependencies": {
     "patch-package": "^8.0.1"
