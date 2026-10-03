@@ -1,0 +1,120 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { buildPayload } from '../src/payload.js';
+
+function makeMsg(overrides = {}) {
+  return {
+    id: { _serialized: 'false_1203@g.us_ABC' },
+    timestamp: 1759400000,
+    body: 'hello @agent',
+    type: 'chat',
+    author: '14165551234@c.us',
+    from: '14165551234@c.us',
+    hasQuotedMsg: false,
+    hasMedia: false,
+    getContact: async () => ({ pushname: 'Priya', number: '14165551234' }),
+    getMentions: async () => [],
+    ...overrides,
+  };
+}
+
+function makeGroupChat(overrides = {}) {
+  return {
+    id: { _serialized: '1203@g.us' },
+    name: 'Lisbon trip',
+    isGroup: true,
+    participants: [1, 2, 3, 4, 5],
+    ...overrides,
+  };
+}
+
+function makeDmChat(overrides = {}) {
+  return {
+    id: { _serialized: '14165551234@c.us' },
+    name: 'Priya',
+    isGroup: false,
+    ...overrides,
+  };
+}
+
+test('buildPayload produces the §3.1 shape', async () => {
+  const payload = await buildPayload(makeMsg(), makeGroupChat(), '1555@c.us');
+
+  assert.equal(payload.event, 'message');
+  assert.equal(payload.channel, 'whatsapp');
+  assert.equal(payload.message_id, 'false_1203@g.us_ABC');
+  assert.equal(payload.chat.id, '1203@g.us');
+  assert.equal(payload.chat.is_group, true);
+  assert.equal(payload.chat.participant_count, 5);
+  assert.equal(payload.sender.id, '14165551234@c.us');
+  assert.equal(payload.sender.name, 'Priya');
+  assert.equal(payload.text, 'hello @agent');
+  assert.equal(payload.agent_id, '1555@c.us');
+  assert.equal(payload.quoted, null);
+  assert.equal(payload.media, null);
+});
+
+test('tagged is true only when selfId is among the mentioned ids', async () => {
+  const msg = makeMsg({ getMentions: async () => [{ id: { _serialized: '1555@c.us' } }] });
+  const chat = makeGroupChat();
+
+  const tagged = await buildPayload(msg, chat, '1555@c.us');
+  assert.equal(tagged.tagged, true);
+
+  const untagged = await buildPayload(msg, chat, '9999@c.us');
+  assert.equal(untagged.tagged, false);
+});
+
+test('group messages use msg.author as the sender id', async () => {
+  const msg = makeMsg({ author: '14165551234@c.us', from: '1203@g.us' });
+  const payload = await buildPayload(msg, makeGroupChat(), null);
+  assert.equal(payload.sender.id, '14165551234@c.us');
+});
+
+test('DMs use msg.from as the sender id', async () => {
+  const msg = makeMsg({ author: undefined, from: '14165551234@c.us' });
+  const payload = await buildPayload(msg, makeDmChat(), null);
+  assert.equal(payload.sender.id, '14165551234@c.us');
+  assert.equal(payload.chat.is_group, false);
+  assert.equal(payload.chat.participant_count, null);
+});
+
+test('a quoted message is included when present', async () => {
+  const msg = makeMsg({
+    hasQuotedMsg: true,
+    getQuotedMessage: async () => ({
+      id: { _serialized: 'quoted_id' },
+      author: '555@c.us',
+      body: 'original text',
+      fromMe: false,
+    }),
+  });
+  const payload = await buildPayload(msg, makeGroupChat(), null);
+  assert.deepEqual(payload.quoted, {
+    id: 'quoted_id',
+    sender_id: '555@c.us',
+    text: 'original text',
+    from_me: false,
+  });
+});
+
+test('media is summarized without base64 unless forwardMedia is set', async () => {
+  const msg = makeMsg({ hasMedia: true, type: 'image' });
+  const payload = await buildPayload(msg, makeGroupChat(), null, { forwardMedia: false });
+  assert.deepEqual(payload.media, { type: 'image' });
+});
+
+test('media includes base64 data when forwardMedia is set', async () => {
+  const msg = makeMsg({
+    hasMedia: true,
+    type: 'image',
+    downloadMedia: async () => ({ mimetype: 'image/jpeg', filename: null, data: 'base64data' }),
+  });
+  const payload = await buildPayload(msg, makeGroupChat(), null, { forwardMedia: true });
+  assert.deepEqual(payload.media, {
+    type: 'image',
+    mimetype: 'image/jpeg',
+    filename: null,
+    data_base64: 'base64data',
+  });
+});

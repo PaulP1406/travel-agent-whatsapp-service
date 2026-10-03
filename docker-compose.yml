@@ -1,0 +1,20 @@
+services:
+  whatsapp:
+    build: .
+    container_name: whatsapp-service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - AUTH_DATA_PATH=/data/.wwebjs_auth
+      - CHROME_PATH=/usr/bin/chromium
+      - HEADLESS=true
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - wwebjs_auth:/data/.wwebjs_auth
+    shm_size: "1gb"
+    mem_limit: 1g
+
+volumes:
+  wwebjs_auth:

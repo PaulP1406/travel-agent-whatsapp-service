@@ -1,0 +1,105 @@
+diff --git a/node_modules/whatsapp-web.js/src/structures/Chat.js b/node_modules/whatsapp-web.js/src/structures/Chat.js
+index 40211bf..0859976 100644
+--- a/node_modules/whatsapp-web.js/src/structures/Chat.js
++++ b/node_modules/whatsapp-web.js/src/structures/Chat.js
+@@ -20,6 +20,12 @@ class Chat extends Base {
+          * @type {object}
+          */
+         this.id = data.id;
++        // WhatsApp Web's 2.3000.x update renamed WID's serialized property
++        // from _serialized to $1 in some paths; normalize so every
++        // this.id._serialized read in this file keeps working.
++        if (this.id && this.id._serialized === undefined && this.id.$1 !== undefined) {
++            this.id._serialized = this.id.$1;
++        }
+ 
+         /**
+          * Title of the chat
+diff --git a/node_modules/whatsapp-web.js/src/structures/Contact.js b/node_modules/whatsapp-web.js/src/structures/Contact.js
+index 4ee5194..cda04b3 100644
+--- a/node_modules/whatsapp-web.js/src/structures/Contact.js
++++ b/node_modules/whatsapp-web.js/src/structures/Contact.js
+@@ -27,6 +27,12 @@ class Contact extends Base {
+          * @type {ContactId}
+          */
+         this.id = data.id;
++        // WhatsApp Web's 2.3000.x update renamed WID's serialized property
++        // from _serialized to $1 in some paths; normalize so every
++        // this.id._serialized read in this file keeps working.
++        if (this.id && this.id._serialized === undefined && this.id.$1 !== undefined) {
++            this.id._serialized = this.id.$1;
++        }
+ 
+         /**
+          * Contact's phone number
+diff --git a/node_modules/whatsapp-web.js/src/structures/Message.js b/node_modules/whatsapp-web.js/src/structures/Message.js
+index dd977e8..afbee81 100644
+--- a/node_modules/whatsapp-web.js/src/structures/Message.js
++++ b/node_modules/whatsapp-web.js/src/structures/Message.js
+@@ -35,6 +35,12 @@ class Message extends Base {
+          * @type {object}
+          */
+         this.id = data.id;
++        // WhatsApp Web's 2.3000.x update renamed WID's serialized property
++        // from _serialized to $1 in some paths; normalize so every
++        // this.id._serialized read in this file keeps working.
++        if (this.id && this.id._serialized === undefined && this.id.$1 !== undefined) {
++            this.id._serialized = this.id.$1;
++        }
+ 
+         /**
+          * ACK status for the message
+diff --git a/node_modules/whatsapp-web.js/src/util/Injected/Utils.js b/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
+index 540078a..de05964 100644
+--- a/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
++++ b/node_modules/whatsapp-web.js/src/util/Injected/Utils.js
+@@ -582,7 +582,7 @@ exports.LoadUtils = () => {
+ 
+         return window
+             .require('WAWebCollections')
+-            .Msg.get(newMsgKey._serialized);
++            .Msg.get(newMsgKey._serialized || newMsgKey.$1);
+     };
+ 
+     window.WWebJS.editMessage = async (msg, content, options = {}) => {
+@@ -830,7 +830,7 @@ exports.LoadUtils = () => {
+ 
+         if (typeof msg.id.remote === 'object') {
+             msg.id = Object.assign({}, msg.id, {
+-                remote: msg.id.remote._serialized,
++                remote: msg.id.remote._serialized || msg.id.remote.$1,
+             });
+         }
+ 
+@@ -953,7 +953,7 @@ exports.LoadUtils = () => {
+             model.isGroup = true;
+             const chatWid = window
+                 .require('WAWebWidFactory')
+-                .createWid(chat.id._serialized);
++                .createWid(chat.id._serialized || chat.id.$1);
+             const groupMetadata =
+                 window.require('WAWebCollections').GroupMetadata ||
+                 window.require('WAWebCollections').WAWebGroupMetadataCollection;
+@@ -981,16 +981,15 @@ exports.LoadUtils = () => {
+ 
+         model.lastMessage = null;
+         if (model.msgs && model.msgs.length) {
+-            const lastMessage = chat.lastReceivedKey
+-                ? window
+-                      .require('WAWebCollections')
+-                      .Msg.get(chat.lastReceivedKey._serialized) ||
++            const lastReceivedKeyId =
++                chat.lastReceivedKey &&
++                (chat.lastReceivedKey._serialized || chat.lastReceivedKey.$1);
++            const lastMessage = lastReceivedKeyId
++                ? window.require('WAWebCollections').Msg.get(lastReceivedKeyId) ||
+                   (
+                       await window
+                           .require('WAWebCollections')
+-                          .Msg.getMessagesById([
+-                              chat.lastReceivedKey._serialized,
+-                          ])
++                          .Msg.getMessagesById([lastReceivedKeyId])
+                   )?.messages?.[0]
+                 : null;
+             lastMessage &&

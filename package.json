@@ -1,0 +1,28 @@
+{
+  "name": "whatsapp-service",
+  "version": "1.0.0",
+  "description": "Dumb, reliable WhatsApp relay between a group chat and the brain service",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "scripts": {
+    "start": "node --env-file=.env src/index.js",
+    "fake-brain": "node --env-file=.env scripts/fake-brain.js",
+    "reset-auth": "node --env-file=.env scripts/reset-auth.js",
+    "smoke": "bash scripts/smoke.sh",
+    "test": "node --test test/",
+    "postinstall": "patch-package"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pino": "^9.4.0",
+    "pino-pretty": "^11.2.2",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.26.0"
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.1"
+  }
+}
