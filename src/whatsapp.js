@@ -157,6 +157,35 @@ async function processQueue() {
   processing = false;
 }
 
+async function loadMessageMedia(media) {
+  if (media?.data_base64) {
+    return new MessageMedia(
+      media.mimetype || 'image/jpeg',
+      media.data_base64,
+      media.filename || 'hotel.jpg',
+    );
+  }
+  const url = media?.url;
+  if (!url) {
+    throw new Error('media url or data_base64 is required');
+  }
+  try {
+    return await MessageMedia.fromUrl(url, { unsafeMime: true });
+  } catch (err) {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+      },
+    });
+    if (!res.ok) throw err;
+    const buf = Buffer.from(await res.arrayBuffer());
+    const mime = (res.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
+    return new MessageMedia(mime || 'image/jpeg', buf.toString('base64'), media.filename || 'hotel.jpg');
+  }
+}
+
 async function doSend({ chatId, text, poll, replyToMessageId, mentions, media }) {
   if (!state.ready) {
     const err = new Error('client not ready');
@@ -201,15 +230,7 @@ async function doSend({ chatId, text, poll, replyToMessageId, mentions, media })
     content = new Poll(poll.name, poll.options, { allowMultipleAnswers: !!poll.allowMultipleAnswers });
     markOwnSending(chatId, poll.name);
   } else if (media?.url || media?.data_base64) {
-    if (media.url) {
-      content = await MessageMedia.fromUrl(media.url, { unsafeMime: true });
-    } else {
-      content = new MessageMedia(
-        media.mimetype || 'image/jpeg',
-        media.data_base64,
-        media.filename || 'photo.jpg',
-      );
-    }
+    content = await loadMessageMedia(media);
     if (text) options.caption = text;
     markOwnSending(chatId, text || media.filename || 'photo');
   } else {
