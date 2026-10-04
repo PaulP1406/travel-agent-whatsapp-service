@@ -83,8 +83,9 @@ function replaceIdsWithNameTags(text, members) {
       mentioned.push(m.id);
     }
   }
-  out = out.replace(/@?[A-Za-z0-9._+-]+@(?:c\.us|g\.us|lid|s\.whatsapp\.net)/gi, '');
-  out = out.replace(/@\d{6,}/g, '');
+  // A JID sitting in a URL path is not a mention. Leave /dashboard/1203@g.us/ intact.
+  out = out.replace(/(?<![/\w%])@?[A-Za-z0-9._+-]+@(?:c\.us|g\.us|lid|s\.whatsapp\.net)/gi, '');
+  out = out.replace(/(?<![/\w%])@\d{6,}/g, '');
   return { text: out, mentioned, seen };
 }
 
@@ -134,6 +135,24 @@ function mapProtectedUrls(text, rewrite) {
 
 // Keep @Display Name pings. Rewrite WhatsApp IDs / phone mentions onto that name
 // and return the contact ids WhatsApp needs to actually notify them.
+export function protectDashboardLinks(text, chatId) {
+  const id = String(chatId || '').trim();
+  if (!text || !id) return String(text || '');
+  const encoded = encodeURIComponent(id);
+  return String(text).replace(/\/dashboard\/([^/?#\s]*)/gi, (full, group) => {
+    let decoded = group;
+    try {
+      decoded = decodeURIComponent(group);
+    } catch {
+      decoded = group;
+    }
+    if (!group || group.includes('@') || decoded.includes('@')) {
+      return `/dashboard/${encoded}`;
+    }
+    return full;
+  });
+}
+
 export function rewriteOutboundMentions(text, members = []) {
   return mapProtectedUrls(text, (masked) => {
     const { text: withNames, mentioned, seen } = replaceIdsWithNameTags(masked, members);

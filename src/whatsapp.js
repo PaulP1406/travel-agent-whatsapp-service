@@ -3,7 +3,7 @@ import qrcode from 'qrcode-terminal';
 import { config } from './config.js';
 import { logger, errInfo } from './logger.js';
 import { forwardToBrain, reportWhatsAppSession } from './brain.js';
-import { buildPayload, buildPollVotePayload, listChatMembers, rewriteOutboundMentions } from './payload.js';
+import { buildPayload, buildPollVotePayload, listChatMembers, protectDashboardLinks, rewriteOutboundMentions } from './payload.js';
 
 const { Client, LocalAuth, Poll, MessageMedia } = pkg;
 
@@ -286,7 +286,7 @@ async function doSend({ chatId, text, poll, replyToMessageId, mentions, media })
         rewritten = rewriteOutboundMentions(text, []);
       }
     }
-    text = rewritten.text;
+    text = protectDashboardLinks(rewritten.text, chat.id?._serialized || chatId);
     const ids = [...new Set([...(mentions || []), ...(rewritten.mentions || [])])].filter(Boolean);
     if (ids.length) options.mentions = ids;
   } else if (mentions?.length) {
@@ -564,18 +564,58 @@ const POLL_WATCH_MS = 30 * 60 * 1000;
 const POLL_WATCH_EVERY_MS = 2500;
 const watchedPolls = new Map();
 
+async function readPollVotes(messageId) {
+  const msg = await state.client.getMessageById(messageId);
+  if (!msg || msg.type !== 'poll_creation') return [];
+  const options = Array.isArray(msg.pollOptions) ? msg.pollOptions : [];
+  let rows = [];
+  try {
+    rows = await state.client.pupPage.evaluate(async (serialized) => {
+      const msgKey = window.require('WAWebMsgKey').fromString(serialized);
+      const items = await window
+        .require('WAWebPollsVotesSchema')
+        .getTable()
+        .equals(['parentMsgKey'], msgKey.toString());
+      return (items || []).map((item) => {
+        const raw = item.selectedOptionLocalIds;
+        const sender = item.sender || item.senderUserJid || '';
+        return {
+          selectedOptionLocalIds: raw ? Array.from(new Uint8Array(raw)) : [],
+          sender: typeof sender === 'string' ? sender : sender._serialized || sender.$1 || '',
+        };
+      });
+    }, messageId);
+  } catch (err) {
+    logger.debug({ err: errInfo(err), messageId }, 'poll vote read failed');
+    return [];
+  }
+  return rows.map((row) => ({
+    voter: row.sender,
+    selectedOptions: row.selectedOptionLocalIds
+      .map((localId) => {
+        const hit = options.find((option) => option.localId === localId);
+        return { name: hit?.name || '', localId };
+      })
+      .filter((option) => option.name),
+    parentMessage: { id: msg.id, pollName: msg.pollName, from: msg.from, to: msg.to },
+    parentMsgKey: msg.id,
+    client: state.client,
+  }));
+}
+
 function watchPollVotes(messageId) {
   if (!messageId || watchedPolls.has(messageId)) return;
   const started = Date.now();
   const tick = async () => {
-    if (!state.ready || Date.now() - started > POLL_WATCH_MS) {
+    if (!state.ready || !state.client || Date.now() - started > POLL_WATCH_MS) {
       clearInterval(interval);
       watchedPolls.delete(messageId);
       return;
     }
     try {
-      const votes = await state.client.getPollVotes(messageId);
-      for (const vote of votes || []) {
+      const votes = await readPollVotes(messageId);
+      for (const vote of votes) {
+        if (!vote.selectedOptions?.length) continue;
         try {
           await handlePollVote(vote);
         } catch (err) {

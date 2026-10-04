@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPayload, buildPollVotePayload, rewriteOutboundMentions } from '../src/payload.js';
+import { buildPayload, buildPollVotePayload, protectDashboardLinks, rewriteOutboundMentions } from '../src/payload.js';
 
 function makeMsg(overrides = {}) {
   return {
@@ -67,6 +67,17 @@ test('outbound rewrite leaves dashboard session URLs intact', () => {
   ]);
   assert.equal(encoded.text, `Watch live:\n${link}`);
   assert.equal(jid.text, `Watch live:\n${raw}`);
+});
+
+test('protectDashboardLinks restores a group id WhatsApp mention-stripping removed', () => {
+  const broken = 'Watch the flight and hotel search live:\nhttp://localhost:3001/dashboard//1eabd965-7bd0-4658-b523-f407c72c189c';
+  const raw = 'http://localhost:3001/dashboard/120363429754104173@g.us/1eabd965-7bd0-4658-b523-f407c72c189c';
+  const fixed = 'http://localhost:3001/dashboard/120363429754104173%40g.us/1eabd965-7bd0-4658-b523-f407c72c189c';
+  assert.equal(
+    protectDashboardLinks(broken, '120363429754104173@g.us'),
+    'Watch the flight and hotel search live:\n' + fixed,
+  );
+  assert.equal(protectDashboardLinks(raw, '120363429754104173@g.us'), fixed);
 });
 
 test('buildPayload produces the flat orchestrator contract shape', async () => {
