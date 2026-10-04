@@ -125,6 +125,35 @@ test('tagged is true only when selfId is among the mentioned ids', async () => {
   assert.equal(untagged.tagged, false);
 });
 
+test('group roster uses each member display name, not a phone number, id, or the group title', async () => {
+  const msg = makeMsg({
+    getMentions: async () => [{ id: { _serialized: '1555@c.us' } }],
+  });
+  const chat = makeGroupChat({
+    name: 'Lisbon trip',
+    client: {
+      getContactById: async (id) => {
+        if (id === '14165551234@c.us') return { name: '+1 416-555-1234', pushname: 'Priya Shah', number: '14165551234' };
+        if (id === '1999@c.us') return { name: 'Lisbon trip', number: '1999' };
+        if (id === '1888@c.us') return { name: '14165558888', pushname: 'Sam Lee' };
+        return { name: id };
+      },
+    },
+    participants: [
+      { id: { _serialized: '14165551234@c.us' }, isAdmin: true },
+      { id: { _serialized: '1999@c.us' } },
+      { id: { _serialized: '1888@c.us' } },
+      { id: { _serialized: '1203@g.us' } },
+    ],
+  });
+  const payload = await buildPayload(msg, chat, '1555@c.us');
+  assert.deepEqual(payload.participants, [
+    { id: '14165551234@c.us', name: 'Priya Shah', is_admin: true, is_agent: false },
+    { id: '1999@c.us', name: '', is_admin: false, is_agent: false },
+    { id: '1888@c.us', name: 'Sam Lee', is_admin: false, is_agent: false },
+  ]);
+});
+
 test('tagged group messages include a named roster of members', async () => {
   const msg = makeMsg({
     getMentions: async () => [{ id: { _serialized: '1555@c.us' } }],

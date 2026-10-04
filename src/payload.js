@@ -34,21 +34,31 @@ export function firstName(name) {
   return s.split(/\s+/)[0];
 }
 
-function isBarePhone(value) {
-  return /^\d{6,}$/.test(String(value || '').trim());
+function looksLikePhone(value) {
+  const s = String(value || '').trim();
+  if (!s) return false;
+  const digits = s.replace(/\D/g, '');
+  if (digits.length < 6) return false;
+  return !/[A-Za-z]/.test(s);
 }
 
-export function contactDisplayName(contact, fallback) {
+// A group member's display name: saved name, otherwise the profile name shown
+// in the chat. Phone numbers, WhatsApp IDs, and the group title are not names.
+export function contactDisplayName(contact, fallback, reject = '') {
+  const blocked = String(reject || '').trim().toLowerCase();
   const candidates = [
     contact?.name,
     contact?.pushname,
     contact?.shortName,
+    contact?.verifiedName,
     contact?.notifyName,
     fallback,
   ];
   for (const raw of candidates) {
     const s = String(raw || '').trim();
-    if (s && !looksLikeWhatsAppId(s) && !isBarePhone(s)) return s;
+    if (!s || looksLikeWhatsAppId(s) || looksLikePhone(s)) continue;
+    if (blocked && s.toLowerCase() === blocked) continue;
+    return s;
   }
   return '';
 }
@@ -188,24 +198,51 @@ export function humanizeChatText(text, members = []) {
   });
 }
 
+async function participantContact(chat, participant, id) {
+  if (participant && typeof participant.getContact === 'function') {
+    try {
+      const contact = await participant.getContact();
+      if (contact) return contact;
+    } catch {
+      // fall through to the client lookup
+    }
+  }
+  const client = chat?.client || participant?.client;
+  if (client && typeof client.getContactById === 'function' && id) {
+    try {
+      return await client.getContactById(id);
+    } catch {
+      // no contact for this member
+    }
+  }
+  return null;
+}
+
 export async function listChatMembers(chat, selfId) {
   const parts = Array.isArray(chat.participants) ? chat.participants : [];
+  const groupName = chat?.name || chat?.formattedTitle || '';
   const members = [];
   for (const p of parts) {
     if (!p || typeof p !== 'object' || Array.isArray(p) || !p.id) continue;
     const id = serializedId(p.id);
-    if (!id) continue;
-    let contact = null;
-    if (typeof p.getContact === 'function') {
-      try {
-        contact = await p.getContact();
-      } catch {
-        // fall through
-      }
-    }
+    if (!id || /@g\.us$/i.test(id)) continue;
+    const contact = await participantContact(chat, p, id);
+    const name =
+      contactDisplayName(contact, '', groupName) ||
+      contactDisplayName(
+        {
+          name: p.name,
+          pushname: p.pushname || p.notify,
+          shortName: p.shortName,
+          verifiedName: p.verifiedName,
+          notifyName: p.notifyName,
+        },
+        '',
+        groupName,
+      );
     members.push({
       id,
-      name: contactDisplayName(contact, ''),
+      name,
       is_admin: !!(p.isAdmin || p.isSuperAdmin),
       is_agent: isHostAccount(id, selfId),
     });
@@ -259,7 +296,7 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
 
   const tagged =
     hosts.some((id) => mentionedIds.includes(id)) || !!(quoted && quoted.from_me);
-  const senderName = contactDisplayName(contact, '') || 'Someone';
+  const senderName = contactDisplayName(contact, '', isGroup ? chat.name : '') || 'Someone';
   const rawText = msg.body ?? '';
   const wantRoster = includeRoster ?? (isGroup && tagged);
   const needsNames = wantRoster || /@/.test(rawText) || looksLikeWhatsAppId(rawText);
