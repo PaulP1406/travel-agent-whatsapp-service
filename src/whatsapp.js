@@ -256,12 +256,15 @@ async function doSend({ chatId, text, poll, replyToMessageId, mentions, media })
   if (replyToMessageId) options.quotedMessageId = replyToMessageId;
 
   if (typeof text === 'string' && text && !poll) {
+    const keepRaw = /https?:\/\/\S*\/dashboard\//i.test(text);
     let rewritten = { text, mentions: [] };
-    try {
-      const members = await listChatMembers(chat, state.selfId);
-      rewritten = rewriteOutboundMentions(text, members);
-    } catch {
-      rewritten = rewriteOutboundMentions(text, []);
+    if (!keepRaw) {
+      try {
+        const members = await listChatMembers(chat, state.selfId);
+        rewritten = rewriteOutboundMentions(text, members);
+      } catch {
+        rewritten = rewriteOutboundMentions(text, []);
+      }
     }
     text = rewritten.text;
     const ids = [...new Set([...(mentions || []), ...(rewritten.mentions || [])])].filter(Boolean);
