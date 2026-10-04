@@ -66,7 +66,7 @@ signature, logs every payload, and echoes back tagged messages.
 | `PORT` | `3000` | This service's HTTP port |
 | `SERVICE_TOKEN` | *(empty → unprotected, warn)* | Bearer token the brain must present |
 | `GROUPS_ONLY` | `true` | Ignore DMs |
-| `ALLOWED_GROUP_IDS` | *(empty → all groups)* | Comma-separated `…@g.us` allow-list |
+| `ALLOWED_GROUP_IDS` | *(empty → all groups)* | Optional allow-list. Empty means every group the burner is in. One WhatsApp login covers many groups; do not run extra sessions per chat. |
 | `SEND_MIN_GAP_MS` | `1500` | Minimum spacing between outbound messages |
 | `SHOW_TYPING` | `true` | Typing indicator while the brain thinks (only when tagged) |
 | `FORWARD_MEDIA` | `false` | Base64 attachments into the payload |

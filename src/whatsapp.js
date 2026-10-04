@@ -127,34 +127,79 @@ async function safeGetChat(msg) {
   }
 }
 
-// --- outbound rate-limited queue ---
+// --- outbound: per-chat queues, one global WhatsApp gap ---
+// One linked phone cannot burst. Jobs from different groups round-robin so
+// a long reply in group A does not starve group B. Inbound handling is also
+// per-chat so two groups can talk to the brain at the same time.
 
-const queue = [];
-let processing = false;
+const sendQueues = new Map();
+let sendRr = 0;
+let sending = false;
 let lastSendAt = 0;
 
 function enqueueSend(job) {
   return new Promise((resolve, reject) => {
-    queue.push({ ...job, resolve, reject });
-    processQueue();
+    const chatId = job.chatId || '_default';
+    if (!sendQueues.has(chatId)) sendQueues.set(chatId, []);
+    sendQueues.get(chatId).push({ ...job, resolve, reject });
+    processSendQueue();
   });
 }
 
-async function processQueue() {
-  if (processing) return;
-  processing = true;
-  while (queue.length) {
-    const job = queue.shift();
-    const wait = Math.max(0, config.sendMinGapMs - (Date.now() - lastSendAt));
-    if (wait > 0) await sleep(wait);
-    lastSendAt = Date.now();
-    try {
-      job.resolve(await doSend(job));
-    } catch (err) {
-      job.reject(err);
+function takeNextSendJob() {
+  const keys = [...sendQueues.keys()].filter((k) => sendQueues.get(k)?.length);
+  if (!keys.length) return null;
+  sendRr %= keys.length;
+  const chatId = keys[sendRr];
+  sendRr += 1;
+  const q = sendQueues.get(chatId);
+  const job = q.shift();
+  if (!q.length) sendQueues.delete(chatId);
+  return job;
+}
+
+async function processSendQueue() {
+  if (sending) return;
+  sending = true;
+  try {
+    while (true) {
+      const job = takeNextSendJob();
+      if (!job) break;
+      const wait = Math.max(0, config.sendMinGapMs - (Date.now() - lastSendAt));
+      if (wait > 0) await sleep(wait);
+      lastSendAt = Date.now();
+      try {
+        job.resolve(await doSend(job));
+      } catch (err) {
+        job.reject(err);
+      }
+    }
+  } finally {
+    sending = false;
+    if ([...sendQueues.values()].some((q) => q.length)) {
+      processSendQueue();
     }
   }
-  processing = false;
+}
+
+const inboundTail = new Map();
+
+function enqueueInbound(chatKey, fn) {
+  const key = chatKey || '_unknown';
+  const prev = inboundTail.get(key) || Promise.resolve();
+  const next = prev
+    .then(fn)
+    .catch((err) => {
+      logger.error({ err: errInfo(err), chat: key }, 'error handling inbound event');
+    });
+  inboundTail.set(key, next);
+  next.finally(() => {
+    if (inboundTail.get(key) === next) inboundTail.delete(key);
+  });
+}
+
+function chatKeyFromMsg(msg) {
+  return msg?.id?.remote || msg?.from || msg?.to || '_unknown';
 }
 
 async function loadMessageMedia(media) {
@@ -273,6 +318,7 @@ export async function listGroups() {
   const chats = await state.client.getChats();
   return chats
     .filter((c) => c.isGroup)
+    .filter((c) => !config.allowedGroupIds.length || config.allowedGroupIds.includes(c.id._serialized))
     .map((c) => ({
       id: c.id._serialized,
       name: c.name,
@@ -489,12 +535,14 @@ function watchPollVotes(messageId) {
   setTimeout(tick, 1200);
 }
 
-async function watchAllowedGroups() {
-  const ids = config.allowedGroupIds;
-  if (!ids.length) return;
+async function watchActiveGroups() {
+  const ids = config.allowedGroupIds.length
+    ? [...config.allowedGroupIds]
+    : (await listGroups()).map((g) => g.id).slice(0, 40);
   for (const id of ids) {
     await openChatForPollVotes(id);
   }
+  logger.info({ watching: ids.length, allowlist: config.allowedGroupIds.length ? 'set' : 'all' }, 'group chats ready');
 }
 
 export function createClient() {
@@ -531,7 +579,9 @@ export function createClient() {
     state.needsQr = false;
     reconnectAttempt = 0;
     logger.info({ agent_id: state.selfId }, 'WhatsApp client ready');
-    watchAllowedGroups().catch(() => {});
+    watchActiveGroups().catch((err) => {
+      logger.warn({ err: errInfo(err) }, 'could not prime group chats');
+    });
     reportWhatsAppSession({
       agent_id: state.selfId,
       status: 'ready',
@@ -551,20 +601,18 @@ export function createClient() {
   // (see ALLOW_SELF_MESSAGES). 'message_create' fires for all messages in
   // both directions; our own fromMe/ownSentIds/allowSelfMessages checks in
   // handleIncomingMessage are what keep replies from looping back on themselves.
-  client.on('message_create', async (msg) => {
-    try {
-      await handleIncomingMessage(msg);
-    } catch (err) {
-      logger.error({ err: errInfo(err) }, 'error handling incoming message');
-    }
+  client.on('message_create', (msg) => {
+    enqueueInbound(chatKeyFromMsg(msg), () => handleIncomingMessage(msg));
   });
 
-  client.on('vote_update', async (vote) => {
-    try {
-      await handlePollVote(vote);
-    } catch (err) {
-      logger.error({ err: errInfo(err) }, 'error handling poll vote');
-    }
+  client.on('vote_update', (vote) => {
+    const remote =
+      vote?.parentMsgKey?.remote ||
+      vote?.parentMessage?.id?.remote ||
+      vote?.parentMsgKey?._serialized ||
+      '_poll';
+    const key = typeof remote === 'string' ? remote : remote?._serialized || '_poll';
+    enqueueInbound(key, () => handlePollVote(vote));
   });
 
   state.client = client;
