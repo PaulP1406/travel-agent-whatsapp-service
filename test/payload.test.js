@@ -56,6 +56,19 @@ test('outbound messages keep @Full Name and rewrite ids onto that name', () => {
   assert.deepEqual(out.mentions, ['14165551234@c.us']);
 });
 
+test('outbound rewrite leaves dashboard session URLs intact', () => {
+  const link = 'http://localhost:3001/dashboard/120363431201620340%40g.us/8a589a65-0212-4bba-b7ab-a95c1d7fdcbe';
+  const raw = 'http://localhost:3001/dashboard/120363431201620340@g.us/8a589a65-0212-4bba-b7ab-a95c1d7fdcbe';
+  const encoded = rewriteOutboundMentions(`Watch live:\n${link}`, [
+    { id: '14165551234@c.us', name: 'Priya Shah' },
+  ]);
+  const jid = rewriteOutboundMentions(`Watch live:\n${raw}`, [
+    { id: '14165551234@c.us', name: 'Priya Shah' },
+  ]);
+  assert.equal(encoded.text, `Watch live:\n${link}`);
+  assert.equal(jid.text, `Watch live:\n${raw}`);
+});
+
 test('buildPayload produces the flat orchestrator contract shape', async () => {
   const payload = await buildPayload(makeMsg(), makeGroupChat(), '1555@c.us');
 

@@ -120,14 +120,28 @@ function expandNameMentions(text, members, mentioned, seen) {
   return out.replace(/[^\S\n]{2,}/g, ' ').replace(/ +\n/g, '\n').trim();
 }
 
+function mapProtectedUrls(text, rewrite) {
+  const urls = [];
+  const masked = String(text || '').replace(/https?:\/\/[^\s]+/gi, (url) => {
+    urls.push(url);
+    return `\u0000URL${urls.length - 1}\u0000`;
+  });
+  const restored = rewrite(masked);
+  const restore = (value) => String(value || '').replace(/\u0000URL(\d+)\u0000/g, (_, i) => urls[Number(i)] || '');
+  if (typeof restored === 'string') return restore(restored);
+  return { ...restored, text: restore(restored.text) };
+}
+
 // Keep @Display Name pings. Rewrite WhatsApp IDs / phone mentions onto that name
 // and return the contact ids WhatsApp needs to actually notify them.
 export function rewriteOutboundMentions(text, members = []) {
-  const { text: withNames, mentioned, seen } = replaceIdsWithNameTags(text, members);
-  return {
-    text: expandNameMentions(withNames, members, mentioned, seen),
-    mentions: mentioned,
-  };
+  return mapProtectedUrls(text, (masked) => {
+    const { text: withNames, mentioned, seen } = replaceIdsWithNameTags(masked, members);
+    return {
+      text: expandNameMentions(withNames, members, mentioned, seen),
+      mentions: mentioned,
+    };
+  });
 }
 
 export function stripOutboundTags(text, members = []) {
@@ -135,8 +149,10 @@ export function stripOutboundTags(text, members = []) {
 }
 
 export function humanizeChatText(text, members = []) {
-  const { text: out } = replaceIdsWithNameTags(text, members);
-  return out.replace(/[^\S\n]{2,}/g, ' ').trim();
+  return mapProtectedUrls(text, (masked) => {
+    const { text: out } = replaceIdsWithNameTags(masked, members);
+    return out.replace(/[^\S\n]{2,}/g, ' ').trim();
+  });
 }
 
 export async function listChatMembers(chat, selfId) {
