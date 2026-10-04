@@ -14,6 +14,20 @@ export function looksLikeWhatsAppId(value) {
   return /@(c\.us|g\.us|lid|s\.whatsapp\.net)\b/i.test(value);
 }
 
+export function hostIdsOf(selfId) {
+  const raw = Array.isArray(selfId) ? selfId : [selfId];
+  return raw.map((id) => serializedId(id) || (typeof id === 'string' ? id : '')).filter(Boolean);
+}
+
+export function isHostAccount(id, selfId) {
+  const hosts = hostIdsOf(selfId);
+  const value = serializedId(id) || (typeof id === 'string' ? id : '');
+  if (!value || hosts.length === 0) return false;
+  if (hosts.includes(value)) return true;
+  const user = value.split('@')[0].split(':')[0];
+  return hosts.some((host) => host.split('@')[0].split(':')[0] === user);
+}
+
 export function firstName(name) {
   const s = String(name || '').trim();
   if (!s || looksLikeWhatsAppId(s)) return '';
@@ -193,7 +207,7 @@ export async function listChatMembers(chat, selfId) {
       id,
       name: contactDisplayName(contact, ''),
       is_admin: !!(p.isAdmin || p.isSuperAdmin),
-      is_agent: id === selfId,
+      is_agent: isHostAccount(id, selfId),
     });
   }
   return members;
@@ -221,12 +235,14 @@ async function getMentionMembers(msg) {
 // fields (mentioned_ids, quoted, media, agent_id, ...) ride along for brains
 // that want them; Go's json.Decode silently ignores fields it doesn't know.
 export async function buildPayload(msg, chat, selfId, opts = {}) {
+  const hosts = hostIdsOf(selfId);
+  const primarySelf = hosts[0] || '';
   const { forwardMedia = false, includeRoster } = opts;
   const contact = await msg.getContact();
   const isGroup = !!chat.isGroup;
   // Group messages you send yourself (ALLOW_SELF_MESSAGES testing) have no
   // msg.author — fall back to selfId instead of misattributing to the group.
-  const senderId = isGroup ? msg.author || (msg.fromMe ? selfId : msg.from) : msg.from;
+  const senderId = isGroup ? msg.author || (msg.fromMe ? primarySelf : msg.from) : msg.from;
   const mentionMembers = await getMentionMembers(msg);
   const mentionedIds = mentionMembers.map((m) => m.id).filter(Boolean);
 
@@ -242,7 +258,7 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
   }
 
   const tagged =
-    (!!selfId && mentionedIds.includes(selfId)) || !!(quoted && quoted.from_me);
+    hosts.some((id) => mentionedIds.includes(id)) || !!(quoted && quoted.from_me);
   const senderName = contactDisplayName(contact, '') || 'Someone';
   const rawText = msg.body ?? '';
   const wantRoster = includeRoster ?? (isGroup && tagged);
@@ -285,7 +301,8 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
     mentioned_ids: mentionedIds,
     quoted,
     media,
-    agent_id: selfId,
+    agent_id: hosts[0] || null,
+    agent_ids: hosts,
   };
 }
 
@@ -327,7 +344,8 @@ export async function buildPollVotePayload(vote, chat, selfId, waClient) {
       null,
     poll_name: vote.parentMessage?.pollName ?? null,
     selected_options: selected,
-    agent_id: selfId,
+    agent_id: hostIdsOf(selfId)[0] || null,
+    agent_ids: hostIdsOf(selfId),
     timestamp: vote.interractedAtTs
       ? Math.floor(vote.interractedAtTs / 1000)
       : Math.floor(Date.now() / 1000),

@@ -3,7 +3,7 @@ import qrcode from 'qrcode-terminal';
 import { config } from './config.js';
 import { logger, errInfo } from './logger.js';
 import { forwardToBrain, reportWhatsAppSession } from './brain.js';
-import { buildPayload, buildPollVotePayload, listChatMembers, protectDashboardLinks, rewriteOutboundMentions } from './payload.js';
+import { buildPayload, buildPollVotePayload, listChatMembers, protectDashboardLinks, rewriteOutboundMentions, isHostAccount } from './payload.js';
 
 const { Client, LocalAuth, Poll, MessageMedia } = pkg;
 
@@ -12,6 +12,7 @@ export const state = {
   ready: false,
   readyAt: null,
   selfId: null,
+  selfIds: [],
   relayed: 0,
   sent: 0,
   needsQr: false,
@@ -19,6 +20,49 @@ export const state = {
 
 const SEEN_MAX = 5000;
 const seen = new Set();
+
+function hostIds() {
+  return state.selfIds.length ? state.selfIds : hostIdsFallback();
+}
+
+function hostIdsFallback() {
+  return state.selfId ? [state.selfId] : [];
+}
+
+async function collectHostIds(client) {
+  const ids = new Set(hostIdsFallback());
+  const add = (value) => {
+    if (!value) return;
+    if (typeof value === 'string') ids.add(value);
+    else if (value._serialized) ids.add(value._serialized);
+    else if (value.user && value.server) ids.add(`${value.user}@${value.server}`);
+  };
+  add(client.info?.wid);
+  add(client.info?.me);
+  add(client.info?.lid);
+  try {
+    const extra = await client.pupPage.evaluate(() => {
+      const out = [];
+      const push = (value) => {
+        if (!value) return;
+        if (typeof value === 'string') out.push(value);
+        else if (value._serialized) out.push(value._serialized);
+      };
+      try {
+        const me = window.require('WAWebUserPrefsMeUser');
+        push(me.getMaybeMeUser?.() || me.getMeUser?.());
+        push(me.getMaybeMeLidUser?.() || me.getMeLidUser?.());
+      } catch {
+        // older WhatsApp builds only expose wid
+      }
+      return out;
+    });
+    for (const id of extra || []) add(id);
+  } catch {
+    // puppeteer page may not be ready for the lid lookup
+  }
+  return [...ids];
+}
 
 function alreadySeen(id) {
   return seen.has(id);
@@ -280,7 +324,7 @@ async function doSend({ chatId, text, poll, replyToMessageId, mentions, media })
     let rewritten = { text, mentions: [] };
     if (!keepRaw) {
       try {
-        const members = await listChatMembers(chat, state.selfId);
+        const members = await listChatMembers(chat, hostIds());
         rewritten = rewriteOutboundMentions(text, members);
       } catch {
         rewritten = rewriteOutboundMentions(text, []);
@@ -358,7 +402,7 @@ export async function getGroup(id) {
     err.statusCode = 404;
     throw err;
   }
-  const members = await listChatMembers(chat, state.selfId);
+  const members = await listChatMembers(chat, hostIds());
   return {
     id: chat.id._serialized,
     name: chat.name,
@@ -381,7 +425,7 @@ export async function getGroupHistory(id, limit = 50) {
   const messages = [];
   for (const msg of msgs) {
     try {
-      messages.push(await buildPayload(msg, chat, state.selfId, { forwardMedia: false }));
+      messages.push(await buildPayload(msg, chat, hostIds(), { forwardMedia: false }));
     } catch (err) {
       logger.warn({ err: errInfo(err) }, 'failed to build payload for history message');
     }
@@ -431,7 +475,7 @@ async function handleIncomingMessage(msg) {
 
   let payload;
   try {
-    payload = await buildPayload(msg, chat, state.selfId, { forwardMedia: config.forwardMedia });
+    payload = await buildPayload(msg, chat, hostIds(), { forwardMedia: config.forwardMedia });
   } catch (err) {
     logger.error({ err: errInfo(err), msgId }, 'failed to build payload for incoming message');
     return;
@@ -494,7 +538,7 @@ async function handlePollVote(vote) {
     return;
   }
 
-  const payload = await buildPollVotePayload(vote, chat, state.selfId, state.client);
+  const payload = await buildPollVotePayload(vote, chat, hostIds(), state.client);
   if (markSeen(dedupe)) return;
 
   state.relayed += 1;
@@ -616,6 +660,7 @@ function watchPollVotes(messageId) {
       const votes = await readPollVotes(messageId);
       for (const vote of votes) {
         if (!vote.selectedOptions?.length) continue;
+        if (isHostAccount(vote.voter, hostIds())) continue;
         try {
           await handlePollVote(vote);
         } catch (err) {
@@ -668,13 +713,14 @@ export function createClient() {
     logger.error({ msg }, 'auth_failure — session invalid, reset AUTH_DATA_PATH and rescan');
   });
 
-  client.on('ready', () => {
+  client.on('ready', async () => {
     state.ready = true;
     state.readyAt = new Date().toISOString();
     state.selfId = client.info?.wid?._serialized ?? null;
+    state.selfIds = await collectHostIds(client);
     state.needsQr = false;
     reconnectAttempt = 0;
-    logger.info({ agent_id: state.selfId }, 'WhatsApp client ready');
+    logger.info({ agent_id: state.selfId, agent_ids: state.selfIds }, 'WhatsApp client ready');
     watchActiveGroups().catch((err) => {
       logger.warn({ err: errInfo(err) }, 'could not prime group chats');
     });
