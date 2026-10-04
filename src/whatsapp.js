@@ -20,6 +20,10 @@ export const state = {
 const SEEN_MAX = 5000;
 const seen = new Set();
 
+function alreadySeen(id) {
+  return seen.has(id);
+}
+
 function markSeen(id) {
   if (seen.has(id)) return true;
   seen.add(id);
@@ -114,17 +118,33 @@ async function stopTyping(chatId) {
 // a cryptic/minified internal error. msg.id.remote is the chat id WhatsApp
 // embeds directly in the message id itself and doesn't depend on to/from, so
 // fall back to resolving through that instead.
+function chatIdFromMessage(msg) {
+  return msg?.id?.remote || msg?.from || msg?.to || null;
+}
+
+async function chatById(id) {
+  if (!id || !state.client) return null;
+  return state.client.getChatById(id);
+}
+
 async function safeGetChat(msg) {
-  try {
-    return await msg.getChat();
-  } catch (err) {
-    const remote = msg.id?.remote;
-    if (!remote) throw err;
-    logger.warn({ err: errInfo(err), remote }, 'msg.getChat() failed, falling back to msg.id.remote');
-    const chat = await state.client.getChatById(remote);
-    if (!chat) throw err;
-    return chat;
+  const remote = chatIdFromMessage(msg);
+  if (msg?.client) {
+    try {
+      return await msg.getChat();
+    } catch (err) {
+      if (!remote) throw err;
+      logger.debug({ err: errInfo(err), remote }, 'msg.getChat() failed, falling back to id');
+      const chat = await chatById(remote);
+      if (!chat) throw err;
+      return chat;
+    }
   }
+  const chat = await chatById(remote);
+  if (!chat) {
+    throw new Error('could not resolve chat: missing client');
+  }
+  return chat;
 }
 
 // --- outbound: per-chat queues, one global WhatsApp gap ---
@@ -449,7 +469,24 @@ async function sendBrainReply(chatId, quoteMessageId, result) {
   }
 }
 
+function voteDedupeKey(vote) {
+  const pollId =
+    vote?.parentMessage?.id?._serialized ||
+    vote?.parentMsgKey?._serialized ||
+    vote?.parentMsgKey?.$1 ||
+    (typeof vote?.parentMsgKey === 'string' ? vote.parentMsgKey : '') ||
+    '';
+  const voter = vote?.voter?._serialized || vote?.voter || '';
+  const selected = (vote.selectedOptions || [])
+    .map((o) => o?.name ?? (o?.localId != null ? String(o.localId) : ''))
+    .join('|');
+  return `pollvote:${pollId}:${voter}:${selected}`;
+}
+
 async function handlePollVote(vote) {
+  const dedupe = voteDedupeKey(vote);
+  if (alreadySeen(dedupe)) return;
+
   const chat = await chatForVote(vote);
   if (!chat) return;
   if (config.groupsOnly && !chat.isGroup) return;
@@ -457,8 +494,7 @@ async function handlePollVote(vote) {
     return;
   }
 
-  const payload = await buildPollVotePayload(vote, chat, state.selfId);
-  const dedupe = `pollvote:${payload.poll_message_id}:${payload.voter_id}:${payload.selected_options.join('|')}`;
+  const payload = await buildPollVotePayload(vote, chat, state.selfId, state.client);
   if (markSeen(dedupe)) return;
 
   state.relayed += 1;
@@ -474,27 +510,44 @@ async function handlePollVote(vote) {
   await sendBrainReply(chat.id._serialized, payload.poll_message_id, result);
 }
 
+function chatIdFromVote(vote) {
+  const candidates = [
+    vote?.parentMsgKey?.remote,
+    vote?.parentMessage?.id?.remote,
+    vote?.parentMessage?.from,
+    vote?.parentMsgKey?._serialized,
+    vote?.parentMsgKey?.$1,
+    typeof vote?.parentMsgKey === 'string' ? vote.parentMsgKey : null,
+    vote?.parentMessage?.id?._serialized,
+  ];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const s = typeof raw === 'string' ? raw : raw._serialized || raw.$1 || '';
+    const hit = String(s).match(/(\d+@(?:g\.us|c\.us))/);
+    if (hit) return hit[1];
+    if (typeof s === 'string' && s.endsWith('@g.us')) return s;
+  }
+  return null;
+}
+
 async function chatForVote(vote) {
-  if (vote?.parentMessage) {
+  const id = chatIdFromVote(vote);
+  if (id) {
+    try {
+      const chat = await chatById(id);
+      if (chat) return chat;
+    } catch (err) {
+      logger.debug({ err: errInfo(err), id }, 'poll vote chatById failed');
+    }
+  }
+  if (vote?.parentMessage?.client) {
     try {
       return await safeGetChat(vote.parentMessage);
     } catch (err) {
       logger.warn({ err: errInfo(err) }, 'poll parent getChat failed');
     }
   }
-  const remote =
-    vote?.parentMsgKey?.remote ||
-    vote?.parentMessage?.id?.remote ||
-    vote?.parentMsgKey?._serialized ||
-    vote?.parentMsgKey?.$1;
-  if (!remote || !state.client) return null;
-  const id = typeof remote === 'string' ? remote : remote._serialized || remote.$1;
-  try {
-    return await state.client.getChatById(id);
-  } catch (err) {
-    logger.warn({ err: errInfo(err), id }, 'could not resolve chat for poll vote');
-    return null;
-  }
+  return null;
 }
 
 async function openChatForPollVotes(chatId) {

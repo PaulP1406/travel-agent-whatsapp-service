@@ -278,12 +278,13 @@ export async function buildPayload(msg, chat, selfId, opts = {}) {
 // contract for it yet, so these field names are this service's proposal
 // (kept flat, matching the message event's convention) rather than an
 // existing agreement.
-export async function buildPollVotePayload(vote, chat, selfId) {
+export async function buildPollVotePayload(vote, chat, selfId, waClient) {
   let contact = null;
   const voterId = serializedId(vote.voter) || String(vote.voter || '');
+  const client = vote.client || waClient;
   try {
-    if (voterId) {
-      contact = await vote.client.getContactById(voterId);
+    if (voterId && client) {
+      contact = await client.getContactById(voterId);
     }
   } catch {
     // best effort — fall back to the bare id below
